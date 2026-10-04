@@ -12,6 +12,38 @@ datasource db {
   schemas   = ["raffle"]
 }
 
+enum DrawStatus {
+  SCHEDULED
+  OPEN
+  CLOSED
+  DRAWN
+  FULFILLING
+  COMPLETED
+  PURGED
+  CANCELLED
+
+  @@schema("raffle")
+}
+
+enum EntryStatus {
+  VALID
+  FLAGGED
+  REJECTED
+  DISQUALIFIED
+
+  @@schema("raffle")
+}
+
+enum AllocationStatus {
+  ISSUED
+  OPENED
+  PURCHASED
+  EXPIRED
+  CANCELLED
+
+  @@schema("raffle")
+}
+
 model Session {
   id                  String    @id
   shop                String
@@ -48,6 +80,157 @@ model Shop {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  draws         Draw[]
+  drawVariants  DrawVariant[]
+  entries       Entry[]
+  allocations   Allocation[]
+  auditLogs     AuditLog[]
+  webhookEvents WebhookEvent[]
+
   @@index([shopDomain])
+  @@schema("raffle")
+}
+
+model Draw {
+  id                 String     @id @default(uuid())
+  shopId             String
+  title              String
+  status             DrawStatus @default(SCHEDULED)
+  entryOpensAt       DateTime
+  entryClosesAt      DateTime
+  drawAt             DateTime
+  claimWindowMinutes Int
+  unitsAvailable     Int
+  rules              Json       @default("{}")
+  publicRulesText    String?    @db.Text
+  purgeAfterDays     Int        @default(14)
+  encryptionKeyId    String?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  shop        Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  variants    DrawVariant[]
+  entries     Entry[]
+  allocations Allocation[]
+  auditLogs   AuditLog[]
+
+  @@index([shopId])
+  @@index([shopId, status])
+  @@index([status])
+  @@index([entryClosesAt])
+  @@index([drawAt])
+  @@schema("raffle")
+}
+
+model DrawVariant {
+  id         String   @id @default(uuid())
+  shopId     String
+  drawId     String
+  productGid String
+  variantGid String
+  msrpPrice  Decimal  @db.Decimal(10, 2)
+  quantity   Int
+  createdAt  DateTime @default(now())
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  draw Draw @relation(fields: [drawId], references: [id], onDelete: Cascade)
+
+  @@unique([drawId, variantGid])
+  @@index([shopId])
+  @@index([drawId])
+  @@index([variantGid])
+  @@schema("raffle")
+}
+
+model Entry {
+  id                    String      @id @default(uuid())
+  shopId                String
+  drawId                String
+  customerGid           String
+  normalizedEmailHash   String
+  emailEncrypted        String
+  countryCode           String?
+  addressHash           String?
+  deviceFingerprintHash String?
+  ipHash                String?
+  riskScore             Int         @default(0)
+  riskFlags             Json        @default("[]")
+  status                EntryStatus @default(VALID)
+  rank                  Int?
+  createdAt             DateTime    @default(now())
+
+  shop        Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  draw        Draw         @relation(fields: [drawId], references: [id], onDelete: Cascade)
+  allocations Allocation[]
+
+  @@unique([drawId, customerGid])
+  @@unique([drawId, normalizedEmailHash])
+  @@index([shopId])
+  @@index([drawId])
+  @@index([drawId, status])
+  @@index([drawId, rank])
+  @@index([deviceFingerprintHash])
+  @@index([ipHash])
+  @@schema("raffle")
+}
+
+model Allocation {
+  id             String           @id @default(uuid())
+  shopId         String
+  drawId         String
+  entryId        String
+  variantGid     String
+  rank           Int
+  claimTokenHash String           @unique
+  status         AllocationStatus @default(ISSUED)
+  draftOrderGid  String?
+  deadlineAt     DateTime
+  issuedAt       DateTime         @default(now())
+  openedAt       DateTime?
+  purchasedAt    DateTime?
+
+  shop  Shop  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  draw  Draw  @relation(fields: [drawId], references: [id], onDelete: Cascade)
+  entry Entry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([shopId])
+  @@index([drawId])
+  @@index([entryId])
+  @@index([deadlineAt])
+  @@index([status])
+  @@schema("raffle")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  shopId    String
+  drawId    String?
+  eventType String
+  actor     String
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  shop Shop  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  draw Draw? @relation(fields: [drawId], references: [id], onDelete: SetNull)
+
+  @@index([shopId])
+  @@index([drawId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@schema("raffle")
+}
+
+model WebhookEvent {
+  id          String   @id @default(uuid())
+  shopId      String
+  eventId     String   @unique
+  topic       String
+  processedAt DateTime @default(now())
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId])
+  @@index([eventId])
+  @@index([topic])
   @@schema("raffle")
 }
