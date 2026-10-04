@@ -1,0 +1,36 @@
+node_modules/
+
+# macOS & OS files
+.DS_Store
+Thumbs.db
+
+# Build outputs & caches
+/.cache
+/build
+/app/build
+/public/build/
+/public/_dev
+/app/public/build
+.react-router/
+dist/
+
+# SQLite & local DBs
+/prisma/dev.sqlite*
+/prisma/*.sqlite*
+database.sqlite*
+*.sqlite*
+
+# Environment files - NEVER commit secrets
+.env
+.env.*
+.env.local
+!.env.example
+
+# Extension build outputs
+/extensions/*/dist
+
+# Shopify CLI files created during app dev
+.shopify
+.shopify/*
+.shopify.lock
+*.log

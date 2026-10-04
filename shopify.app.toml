@@ -1,0 +1,40 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "5659eb40af5e9670a92743f7c578e2fe"
+name = "Fairdrops"
+application_url = "https://fairdrops.onrender.com"
+embedded = true
+
+[access_scopes]
+# Minimum scopes required for Fairdrops raffle operation:
+# read_products: Read raffle products/variants, prices, images, titles
+# write_products: Unpublish/hide raffle products from storefront sales channels (Phase 4)
+# read_customers: Verify customer eligibility (account age, email verification, address)
+# write_draft_orders: Create secure, MSRP-locked, single-use draft orders for winners (Phase 9)
+# read_orders: Listen to orders/paid & orders/create webhooks to finalize allocations and verify region
+# read_locations: Check merchant inventory locations
+# read_inventory: Check variant stock levels before launching draws
+scopes = "read_products,write_products,read_customers,write_draft_orders,read_orders,read_locations,read_inventory"
+
+[webhooks]
+api_version = "2025-01"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+[app_proxy]
+url = "https://fairdrops.onrender.com/apps/raffle"
+subpath = "raffle"
+prefix = "apps"
+
+[auth]
+redirect_urls = [ "https://fairdrops.onrender.com/auth/callback" ]
+
+[build]
+include_config_on_deploy = true
+automatically_update_urls_on_dev = true
