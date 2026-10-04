@@ -80,45 +80,69 @@ model Shop {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  draws         Draw[]
-  drawVariants  DrawVariant[]
-  entries       Entry[]
-  allocations   Allocation[]
-  auditLogs     AuditLog[]
-  webhookEvents WebhookEvent[]
+  draws               Draw[]
+  drawVariants        DrawVariant[]
+  entries             Entry[]
+  allocations         Allocation[]
+  auditLogs           AuditLog[]
+  webhookEvents       WebhookEvent[]
+  visibilitySnapshots ProductVisibilitySnapshot[]
 
   @@index([shopDomain])
   @@schema("raffle")
 }
 
 model Draw {
-  id                 String     @id @default(uuid())
-  shopId             String
-  title              String
-  status             DrawStatus @default(SCHEDULED)
-  entryOpensAt       DateTime
-  entryClosesAt      DateTime
-  drawAt             DateTime
-  claimWindowMinutes Int
-  unitsAvailable     Int
-  rules              Json       @default("{}")
-  publicRulesText    String?    @db.Text
-  purgeAfterDays     Int        @default(14)
-  encryptionKeyId    String?
-  createdAt          DateTime   @default(now())
-  updatedAt          DateTime   @updatedAt
+  id                   String     @id @default(uuid())
+  shopId               String
+  title                String
+  status               DrawStatus @default(SCHEDULED)
+  entryOpensAt         DateTime
+  entryClosesAt        DateTime
+  drawAt               DateTime
+  claimWindowMinutes   Int
+  unitsAvailable       Int
+  rules                Json       @default("{}")
+  publicRulesText      String?    @db.Text
+  purgeAfterDays       Int        @default(14)
+  encryptionKeyId      String?
+  hasVisibilityWarning Boolean    @default(false)
+  visibilityWarning    String?    @db.Text
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
 
-  shop        Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  variants    DrawVariant[]
-  entries     Entry[]
-  allocations Allocation[]
-  auditLogs   AuditLog[]
+  shop                Shop                        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  variants            DrawVariant[]
+  entries             Entry[]
+  allocations         Allocation[]
+  auditLogs           AuditLog[]
+  visibilitySnapshots ProductVisibilitySnapshot[]
 
   @@index([shopId])
   @@index([shopId, status])
   @@index([status])
   @@index([entryClosesAt])
   @@index([drawAt])
+  @@schema("raffle")
+}
+
+model ProductVisibilitySnapshot {
+  id            String   @id @default(uuid())
+  shopId        String
+  drawId        String
+  productGid    String
+  snapshotData  Json
+  unpublishedAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  draw Draw @relation(fields: [drawId], references: [id], onDelete: Cascade)
+
+  @@unique([drawId, productGid])
+  @@index([shopId])
+  @@index([drawId])
+  @@index([productGid])
   @@schema("raffle")
 }
 

@@ -11,10 +11,12 @@ import {
   EmptyState,
   InlineStack,
   BlockStack,
+  Banner,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma, { forShop } from "../db.server";
 import { assertTransition } from "../services/drawStateMachine";
+import { SetupChecklistCard } from "../components/SetupChecklistCard";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -132,6 +134,8 @@ export default function DrawsIndex() {
     plural: "draws",
   };
 
+  const breachedDraws = draws.filter((d) => d.hasVisibilityWarning);
+
   return (
     <Page
       title="Raffle & Draw Drops"
@@ -143,53 +147,73 @@ export default function DrawsIndex() {
     >
       <Layout>
         <Layout.Section>
-          {draws.length === 0 ? (
-            <Card>
-              <EmptyState
-                heading="Launch your first high-demand drop"
-                action={{
-                  content: "Create Draw",
-                  onAction: () => navigate("/app/draws/new"),
-                }}
-                image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+          <BlockStack gap="400">
+            {breachedDraws.length > 0 && (
+              <Banner
+                title="Security Alert: Raffle Product Visibility Breach Detected"
+                tone="critical"
               >
                 <p>
-                  Create time-limited, bot-protected product draws. Products remain completely
-                  hidden from your public storefront until winners claim their private orders.
+                  Fairdrops detected that one or more raffle products were re-published to storefront sales channels.
+                  Automated emergency unpublishing was executed to prevent unauthorized purchases. Please review the affected drops marked with <strong>Visibility Alert</strong> below.
                 </p>
-              </EmptyState>
-            </Card>
-          ) : (
-            <Card padding="0">
-              <IndexTable
-                resourceName={resourceName}
-                itemCount={draws.length}
-                headings={[
-                  { title: "Title" },
-                  { title: "Status" },
-                  { title: "Entry Window" },
-                  { title: "Draw Time" },
-                  { title: "Units" },
-                  { title: "Entries" },
-                  { title: "Actions" },
-                ]}
-                selectable={false}
-              >
-                {draws.map((draw, index) => {
-                  const opensAt = new Date(draw.entryOpensAt).toLocaleString();
-                  const closesAt = new Date(draw.entryClosesAt).toLocaleString();
-                  const drawAt = new Date(draw.drawAt).toLocaleString();
-                  const isScheduled = draw.status === "SCHEDULED";
-                  const canCancel = !["COMPLETED", "PURGED", "CANCELLED"].includes(draw.status);
+              </Banner>
+            )}
 
-                  return (
-                    <IndexTable.Row id={draw.id} key={draw.id} position={index}>
-                      <IndexTable.Cell>
-                        <Text variant="bodyMd" fontWeight="bold" as="span">
-                          {draw.title}
-                        </Text>
-                      </IndexTable.Cell>
-                      <IndexTable.Cell>{getStatusBadge(draw.status)}</IndexTable.Cell>
+            <SetupChecklistCard />
+
+            {draws.length === 0 ? (
+              <Card>
+                <EmptyState
+                  heading="Launch your first high-demand drop"
+                  action={{
+                    content: "Create Draw",
+                    onAction: () => navigate("/app/draws/new"),
+                  }}
+                  image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+                >
+                  <p>
+                    Create time-limited, bot-protected product draws. Products remain completely
+                    hidden from your public storefront until winners claim their private orders.
+                  </p>
+                </EmptyState>
+              </Card>
+            ) : (
+              <Card padding="0">
+                <IndexTable
+                  resourceName={resourceName}
+                  itemCount={draws.length}
+                  headings={[
+                    { title: "Title" },
+                    { title: "Status" },
+                    { title: "Entry Window" },
+                    { title: "Draw Time" },
+                    { title: "Units" },
+                    { title: "Entries" },
+                    { title: "Actions" },
+                  ]}
+                  selectable={false}
+                >
+                  {draws.map((draw, index) => {
+                    const opensAt = new Date(draw.entryOpensAt).toLocaleString();
+                    const closesAt = new Date(draw.entryClosesAt).toLocaleString();
+                    const drawAt = new Date(draw.drawAt).toLocaleString();
+                    const isScheduled = draw.status === "SCHEDULED";
+                    const canCancel = !["COMPLETED", "PURGED", "CANCELLED"].includes(draw.status);
+
+                    return (
+                      <IndexTable.Row id={draw.id} key={draw.id} position={index}>
+                        <IndexTable.Cell>
+                          <InlineStack gap="200" blockAlign="center">
+                            <Text variant="bodyMd" fontWeight="bold" as="span">
+                              {draw.title}
+                            </Text>
+                            {draw.hasVisibilityWarning && (
+                              <Badge tone="critical">Visibility Alert</Badge>
+                            )}
+                          </InlineStack>
+                        </IndexTable.Cell>
+                        <IndexTable.Cell>{getStatusBadge(draw.status)}</IndexTable.Cell>
                       <IndexTable.Cell>
                         <BlockStack gap="050">
                           <Text variant="bodySm" tone="subdued" as="p">
@@ -248,6 +272,7 @@ export default function DrawsIndex() {
               </IndexTable>
             </Card>
           )}
+          </BlockStack>
         </Layout.Section>
       </Layout>
     </Page>

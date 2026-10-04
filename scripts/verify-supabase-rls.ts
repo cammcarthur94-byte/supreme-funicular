@@ -14,6 +14,7 @@ const TABLES = [
   "AuditLog",
   "WebhookEvent",
   "Session",
+  "ProductVisibilitySnapshot",
 ];
 
 async function testTableAccess(tableName: string): Promise<{ success: boolean; status: number; message: string }> {

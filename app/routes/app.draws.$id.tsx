@@ -17,6 +17,11 @@ import { authenticate } from "../shopify.server";
 import prisma, { forShop } from "../db.server";
 import { assertTransition } from "../services/drawStateMachine";
 import type { EligibilityRules } from "../validation/drawValidation";
+import { SetupChecklistCard } from "../components/SetupChecklistCard";
+import {
+  getProductPublicationState,
+  unpublishProductFromAllChannels,
+} from "../services/productVisibility.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -31,6 +36,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     where: { id: drawId },
     include: {
       variants: true,
+      visibilitySnapshots: true,
       allocations: {
         orderBy: { rank: "asc" },
       },
@@ -68,7 +74,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const drawId = params.id as string;
   const formData = await request.formData();
   const intent = formData.get("intent");
@@ -82,6 +88,49 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (!draw) {
     return Response.json({ error: "Draw not found" }, { status: 404 });
+  }
+
+  if (intent === "recheck_visibility") {
+    const drawWithVariants = await tenant.draw.findFirst({
+      where: { id: draw.id },
+      include: { variants: true },
+    });
+    const uniqueProductGids = Array.from(
+      new Set(drawWithVariants?.variants.map((v) => v.productGid) || [])
+    );
+
+    let hasAnyActivePublication = false;
+    for (const productGid of uniqueProductGids) {
+      const state = await getProductPublicationState(admin, productGid);
+      if (state && state.activePublicationIds.length > 0) {
+        hasAnyActivePublication = true;
+        await unpublishProductFromAllChannels({
+          admin,
+          productGid,
+          drawId: draw.id,
+          shopId: shop.id,
+        });
+      }
+    }
+
+    if (!hasAnyActivePublication) {
+      await tenant.draw.update({
+        where: { id: draw.id },
+        data: {
+          hasVisibilityWarning: false,
+          visibilityWarning: null,
+        },
+      });
+
+      await tenant.auditLog.create({
+        drawId: draw.id,
+        eventType: "VISIBILITY_WARNING_CLEARED",
+        actor: session.shop,
+        metadata: { message: "Merchant re-verified product visibility clean." },
+      });
+    }
+
+    return Response.json({ success: true, clean: !hasAnyActivePublication });
   }
 
   if (intent === "cancel_draw") {
@@ -287,6 +336,26 @@ export default function DrawDetails() {
       ]}
     >
       <Layout>
+        {draw.hasVisibilityWarning && (
+          <Layout.Section>
+            <Banner
+              title="Security Alert: Raffle Product Visibility Breach Detected"
+              tone="critical"
+              action={{
+                content: "Verify Unpublished & Clear Alert",
+                onAction: () => {
+                  const data = new FormData();
+                  data.set("intent", "recheck_visibility");
+                  submit(data, { method: "POST" });
+                },
+                loading: isActionRunning,
+              }}
+            >
+              <p>{draw.visibilityWarning}</p>
+            </Banner>
+          </Layout.Section>
+        )}
+
         {draw.status === "CANCELLED" && (
           <Layout.Section>
             <Banner title="This draw was cancelled" tone="critical">
@@ -329,6 +398,11 @@ export default function DrawDetails() {
               </InlineStack>
             </BlockStack>
           </Card>
+        </Layout.Section>
+
+        {/* Setup & Isolation Checklist */}
+        <Layout.Section>
+          <SetupChecklistCard />
         </Layout.Section>
 
         {/* High Level Stats */}
@@ -452,6 +526,47 @@ export default function DrawDetails() {
                 ))}
               </BlockStack>
             </Card>
+
+            {draw.visibilitySnapshots && draw.visibilitySnapshots.length > 0 && (
+              <Card>
+                <BlockStack gap="300">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text variant="headingSm" as="h4">
+                      Visibility Snapshots
+                    </Text>
+                    <Badge tone="success">Unpublished</Badge>
+                  </InlineStack>
+                  <Text variant="bodySm" tone="subdued" as="p">
+                    Channels confirmed unpublished at drop creation:
+                  </Text>
+                  {draw.visibilitySnapshots.map((snap) => {
+                    interface SnapshotPayload {
+                      title?: string;
+                      publications?: Array<{
+                        name: string;
+                        isPublished: boolean;
+                      }>;
+                    }
+                    const data = snap.snapshotData as unknown as SnapshotPayload;
+                    const pubNames = (data?.publications || [])
+                      .filter((p) => p.isPublished)
+                      .map((p) => p.name);
+
+                    return (
+                      <BlockStack key={snap.id} gap="100">
+                        <Text variant="bodySm" fontWeight="bold" as="p">
+                          {data?.title || snap.productGid.slice(-8)}
+                        </Text>
+                        <Text variant="bodySm" tone="subdued" as="p">
+                          Pre-drop channels:{" "}
+                          {pubNames.length > 0 ? pubNames.join(", ") : "None (Already hidden)"}
+                        </Text>
+                      </BlockStack>
+                    );
+                  })}
+                </BlockStack>
+              </Card>
+            )}
           </BlockStack>
         </Layout.Section>
 

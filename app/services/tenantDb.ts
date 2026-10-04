@@ -191,5 +191,49 @@ export function forShop(shopId: string) {
         });
       },
     },
+
+    productVisibilitySnapshot: {
+      upsert: (args: {
+        drawId: string;
+        productGid: string;
+        snapshotData: Prisma.InputJsonValue;
+      }) => {
+        return prisma.productVisibilitySnapshot.upsert({
+          where: {
+            drawId_productGid: {
+              drawId: args.drawId,
+              productGid: args.productGid,
+            },
+          },
+          create: {
+            shopId: cleanShopId,
+            drawId: args.drawId,
+            productGid: args.productGid,
+            snapshotData: args.snapshotData,
+          },
+          update: {
+            snapshotData: args.snapshotData,
+            unpublishedAt: new Date(),
+          },
+        });
+      },
+
+      findMany: (args?: Prisma.ProductVisibilitySnapshotFindManyArgs) => {
+        return prisma.productVisibilitySnapshot.findMany({
+          ...args,
+          where: { ...args?.where, shopId: cleanShopId },
+        });
+      },
+
+      findUnique: (args: { where: { drawId_productGid: { drawId: string; productGid: string } } }) => {
+        return prisma.productVisibilitySnapshot.findFirst({
+          where: {
+            drawId: args.where.drawId_productGid.drawId,
+            productGid: args.where.drawId_productGid.productGid,
+            shopId: cleanShopId,
+          },
+        });
+      },
+    },
   };
 }

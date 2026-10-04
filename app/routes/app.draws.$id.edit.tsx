@@ -20,6 +20,8 @@ import {
 import { authenticate } from "../shopify.server";
 import prisma, { forShop } from "../db.server";
 import { validateDrawInput } from "../validation/drawValidation";
+import { unpublishProductFromAllChannels } from "../services/productVisibility.server";
+import { scheduleVisibilityGuardCheck } from "../services/qstash.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -50,7 +52,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const drawId = params.id as string;
 
   const shop = await prisma.shop.findUniqueOrThrow({
@@ -136,6 +138,24 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       },
     });
   });
+
+  // Ensure updated raffle products are unpublished from all sales channels and save visibility snapshots
+  const uniqueProductGids = Array.from(new Set(variants.map((v) => v.productGid)));
+  for (const productGid of uniqueProductGids) {
+    try {
+      await unpublishProductFromAllChannels({
+        admin,
+        productGid,
+        drawId: existingDraw.id,
+        shopId: shop.id,
+      });
+    } catch (err) {
+      console.error(`Failed to unpublish product ${productGid}:`, err);
+    }
+  }
+
+  // Schedule self-scheduling QStash guard check
+  await scheduleVisibilityGuardCheck({ delaySeconds: 1200 });
 
   return redirect(`/app/draws/${existingDraw.id}`);
 };

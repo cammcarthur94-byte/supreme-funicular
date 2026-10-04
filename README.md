@@ -117,3 +117,61 @@ Fairdrops is designed as a **public multi-merchant application** intended for di
 5. **Storefront Integration**: Customer entry UI is provided strictly via a **Theme App Extension** (app block), leaving merchant theme liquid code untouched and guaranteeing zero storefront performance degradation.
 6. **Mandatory Privacy Webhooks**: Webhook endpoints for `customers/data_request`, `customers/redact`, and `shop/redact` are pre-wired for GDPR/Shopify compliance.
 7. **Cross-Tenant Isolation**: Every database table includes `shopId` foreign keys, and all data queries must be tenant-scoped.
+
+---
+
+## 🛡️ Product Visibility Protection & Storefront Blackout
+
+Raffle drop products must **never be purchasable or discoverable** through standard storefront channels. Fairdrops deploys a multi-layered automated defense combined with operational safeguards:
+
+### 1. Automated GraphQL Unpublishing & Snapshots
+When a drop is created or updated, Fairdrops:
+- Calls `resourcePublicationsV2` to inspect the product's sales channel status.
+- Stores a `ProductVisibilitySnapshot` recording the product's pre-drop channel configuration in the database.
+- Executes `publishableUnpublish` to remove the product from all channels (Online Store, POS, Shop App, Google & YouTube, etc.).
+
+### 2. Three-Tier Visibility Guard
+- **Reactive Layer (Webhooks)**: Subscribes to `products/update`. If a merchant or automated catalog sync re-publishes a raffle product while a drop is `SCHEDULED`, `OPEN`, or `FULFILLING`, Fairdrops immediately auto-unpublishes it, records a `PRODUCT_VISIBILITY_BREACH_DETECTED` audit log, and raises a visible **Visibility Alert** warning flag in the admin UI.
+- **Active Layer (QStash Self-Scheduling Sweeper)**: Self-schedules every 20 minutes (within 15–30m requirement) via Upstash QStash only while drops are active, scanning active products across all channels and standing down when drops conclude.
+- **Backstop Layer (Vercel Cron)**: Configured via `vercel.json` to execute `/api/cron/guard` daily at 02:00 UTC, authenticated via `Bearer ${CRON_SECRET}`.
+
+### 3. Merchant Setup Checklist & Dedicated Inventory Location
+While Fairdrops handles channel unpublishing automatically, merchants must follow two operational setup steps:
+1. **Manual Channel Confirmation**: Check *Shopify Admin > Products > [Product] > Publishing* and confirm 0 channels are selected.
+2. **Dedicated Fulfillment Location (Recommended)**:
+   - Create a dedicated location in *Settings > Locations* (e.g., "Raffle Vault") and assign raffle inventory there.
+   - Uncheck *"Fulfill online orders from this location"*. This physically prevents the storefront checkout engine from drawing from this stock pool even if direct cart links are constructed.
+   - **⚠️ CRITICAL: Dev Store Testing Required**: Shopify location routing rules vary depending on multi-location shipping profiles. **You MUST test draft order creation and checkout allocation from this location on your development store** to ensure winners can complete their purchase before running a live drop.
+
+### 4. Dev Store Storefront Blackout Test Plan
+Before launching a live drop, verify complete product invisibility on your development store:
+
+1. **Direct Handle URL**:
+   Navigate to `https://[your-store].myshopify.com/products/[product-handle]`.
+   - **Expected Result**: HTTP 404 Page Not Found.
+
+2. **Public Catalog JSON**:
+   Navigate to `https://[your-store].myshopify.com/products.json`.
+   - Search the JSON document for the product handle or title.
+   - **Expected Result**: Product is omitted from the JSON catalog.
+
+3. **Storefront Search**:
+   Use your storefront search bar and search for the exact product title.
+   - **Expected Result**: 0 results returned.
+
+4. **Storefront GraphQL API**:
+   Query your storefront endpoint with:
+   ```graphql
+   query {
+     products(first: 10, query: "title:[Product Title]") {
+       edges {
+         node {
+           id
+           title
+         }
+       }
+     }
+   }
+   ```
+   - **Expected Result**: Empty `edges` array (`[]`).
+
