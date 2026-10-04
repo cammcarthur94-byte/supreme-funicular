@@ -23,25 +23,35 @@ export function forShop(shopId: string) {
     shopId: cleanShopId,
 
     draw: {
-      findMany: (args?: Prisma.DrawFindManyArgs) => {
+      findMany: <T extends Prisma.DrawFindManyArgs>(
+        args?: Prisma.SelectSubset<T, Prisma.DrawFindManyArgs>
+      ): Promise<Array<Prisma.DrawGetPayload<T>>> => {
+        const baseArgs = (args || {}) as Prisma.DrawFindManyArgs;
         return prisma.draw.findMany({
-          ...args,
-          where: { ...args?.where, shopId: cleanShopId },
-        });
+          ...baseArgs,
+          where: Object.assign({}, baseArgs.where, { shopId: cleanShopId }),
+        }) as unknown as Promise<Array<Prisma.DrawGetPayload<T>>>;
       },
 
-      findFirst: (args?: Prisma.DrawFindFirstArgs) => {
+      findFirst: <T extends Prisma.DrawFindFirstArgs>(
+        args?: Prisma.SelectSubset<T, Prisma.DrawFindFirstArgs>
+      ): Promise<Prisma.DrawGetPayload<T> | null> => {
+        const baseArgs = (args || {}) as Prisma.DrawFindFirstArgs;
         return prisma.draw.findFirst({
-          ...args,
-          where: { ...args?.where, shopId: cleanShopId },
-        });
+          ...baseArgs,
+          where: Object.assign({}, baseArgs.where, { shopId: cleanShopId }),
+        }) as unknown as Promise<Prisma.DrawGetPayload<T> | null>;
       },
 
-      findUnique: (args: { where: { id: string } } & Omit<Prisma.DrawFindFirstArgs, "where">) => {
+      findUnique: <T extends Omit<Prisma.DrawFindFirstArgs, "where">>(
+        args: { where: { id: string } } & Prisma.SelectSubset<T, Omit<Prisma.DrawFindFirstArgs, "where">>
+      ): Promise<Prisma.DrawGetPayload<T> | null> => {
+        const baseArgs = args as { where: { id: string } } & Record<string, unknown>;
+        const { where, ...rest } = baseArgs;
         return prisma.draw.findFirst({
-          ...args,
-          where: { id: args.where.id, shopId: cleanShopId },
-        });
+          ...rest,
+          where: { id: where.id, shopId: cleanShopId },
+        }) as unknown as Promise<Prisma.DrawGetPayload<T> | null>;
       },
 
       create: (args: Prisma.DrawCreateArgs) => {

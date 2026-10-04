@@ -1,352 +1,255 @@
-import { useEffect } from "react";
-import type {
-  ActionFunctionArgs,
-  HeadersFunction,
-  LoaderFunctionArgs,
-} from "react-router";
-import { useFetcher } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { useLoaderData, useNavigate, useSubmit } from "react-router";
+import {
+  Page,
+  Layout,
+  Card,
+  IndexTable,
+  Badge,
+  Text,
+  Button,
+  EmptyState,
+  InlineStack,
+  BlockStack,
+} from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
-import { boundary } from "@shopify/shopify-app-react-router/server";
+import prisma, { forShop } from "../db.server";
+import { assertTransition } from "../services/drawStateMachine";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
 
-  return null;
+  let shop = await prisma.shop.findUnique({
+    where: { shopDomain: session.shop },
+  });
+
+  if (!shop) {
+    shop = await prisma.shop.create({
+      data: {
+        shopDomain: session.shop,
+        accessToken: session.accessToken || "",
+      },
+    });
+  }
+
+  const draws = await forShop(shop.id).draw.findMany({
+    include: {
+      variants: true,
+      _count: {
+        select: {
+          entries: true,
+          allocations: true,
+        },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return { draws };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
-  const color = ["Red", "Orange", "Yellow", "Green"][
-    Math.floor(Math.random() * 4)
-  ];
-  const response = await admin.graphql(
-    `#graphql
-      mutation populateProduct($product: ProductCreateInput!) {
-        productCreate(product: $product) {
-          product {
-            id
-            title
-            handle
-            status
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  price
-                  barcode
-                  createdAt
-                }
-              }
-            }
-            demoInfo: metafield(namespace: "$app", key: "demo_info") {
-              jsonValue
-            }
-          }
-        }
-      }`,
-    {
-      variables: {
-        product: {
-          title: `${color} Snowboard`,
-          metafields: [
-            {
-              namespace: "$app",
-              key: "demo_info",
-              value: "Created by React Router Template",
-            },
-          ],
-        },
-      },
-    },
-  );
-  const responseJson = await response.json();
+  const { session } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+  const drawId = String(formData.get("drawId") || "");
 
-  const product = responseJson.data!.productCreate!.product!;
-  const variantId = product.variants.edges[0]!.node!.id!;
+  const shop = await prisma.shop.findUniqueOrThrow({
+    where: { shopDomain: session.shop },
+  });
 
-  const variantResponse = await admin.graphql(
-    `#graphql
-    mutation shopifyReactRouterTemplateUpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants {
-          id
-          price
-          barcode
-          createdAt
-        }
-      }
-    }`,
-    {
-      variables: {
-        productId: product.id,
-        variants: [{ id: variantId, price: "100.00" }],
-      },
-    },
-  );
+  const tenant = forShop(shop.id);
 
-  const variantResponseJson = await variantResponse.json();
+  if (intent === "cancel_draw") {
+    const draw = await tenant.draw.findUnique({ where: { id: drawId } });
+    if (!draw) {
+      return Response.json({ error: "Draw not found" }, { status: 404 });
+    }
 
-  const metaobjectResponse = await admin.graphql(
-    `#graphql
-    mutation shopifyReactRouterTemplateUpsertMetaobject($handle: MetaobjectHandleInput!, $values: JSON!) {
-      metaobjectUpsert(handle: $handle, values: $values) {
-        metaobject {
-          id
-          handle
-          values
-        }
-        userErrors {
-          field
-          message
-        }
-      }
-    }`,
-    {
-      variables: {
-        handle: {
-          type: "$app:example",
-          handle: "demo-entry",
-        },
-        values: {
-          title: "Demo Entry",
-          description:
-            "This metaobject was created by the Shopify app template to demonstrate the metaobject API.",
-        },
-      },
-    },
-  );
+    try {
+      assertTransition(draw.status, "CANCELLED");
+    } catch {
+      return Response.json(
+        { error: `Cannot cancel draw currently in status '${draw.status}'` },
+        { status: 400 }
+      );
+    }
 
-  const metaobjectResponseJson = await metaobjectResponse.json();
+    await tenant.draw.update({
+      where: { id: draw.id },
+      data: { status: "CANCELLED" },
+    });
 
-  return {
-    product: responseJson!.data!.productCreate!.product,
-    variant:
-      variantResponseJson!.data!.productVariantsBulkUpdate!.productVariants,
-    metaobject: metaobjectResponseJson!.data!.metaobjectUpsert!.metaobject,
-  };
+    await tenant.auditLog.create({
+      drawId: draw.id,
+      eventType: "DRAW_CANCELLED",
+      actor: session.shop,
+      metadata: { previousStatus: draw.status, reason: "Merchant cancelled from admin list" },
+    });
+
+    return Response.json({ success: true });
+  }
+
+  return Response.json({ error: "Unknown intent" }, { status: 400 });
 };
 
-export default function Index() {
-  const fetcher = useFetcher<typeof action>();
-
-  const shopify = useAppBridge();
-  const isLoading =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
-
-  useEffect(() => {
-    if (fetcher.data?.product?.id) {
-      shopify.toast.show("Product created");
-    }
-  }, [fetcher.data?.product?.id, shopify]);
-
-  const generateProduct = () => fetcher.submit({}, { method: "POST" });
-
-  return (
-    <s-page heading="Shopify app template">
-      <s-button slot="primary-action" onClick={generateProduct}>
-        Generate a product
-      </s-button>
-
-      <s-section heading="Congrats on creating a new Shopify app 🎉">
-        <s-paragraph>
-          This embedded app template uses{" "}
-          <s-link
-            href="https://shopify.dev/docs/apps/tools/app-bridge"
-            target="_blank"
-          >
-            App Bridge
-          </s-link>{" "}
-          interface examples like an{" "}
-          <s-link href="/app/additional">additional page in the app nav</s-link>
-          , as well as an{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            Admin GraphQL
-          </s-link>{" "}
-          mutation demo, to provide a starting point for app development.
-        </s-paragraph>
-      </s-section>
-      <s-section heading="Get started with products">
-        <s-paragraph>
-          Generate a product with GraphQL and get the JSON output for that
-          product. Learn more about the{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql/latest/mutations/productCreate"
-            target="_blank"
-          >
-            productCreate
-          </s-link>{" "}
-          mutation in our API references. Includes a product{" "}
-          <s-link
-            href="https://shopify.dev/docs/apps/build/custom-data/metafields"
-            target="_blank"
-          >
-            metafield
-          </s-link>{" "}
-          and{" "}
-          <s-link
-            href="https://shopify.dev/docs/apps/build/custom-data/metaobjects"
-            target="_blank"
-          >
-            metaobject
-          </s-link>
-          .
-        </s-paragraph>
-        <s-stack direction="inline" gap="base">
-          <s-button
-            onClick={generateProduct}
-            {...(isLoading ? { loading: true } : {})}
-          >
-            Generate a product
-          </s-button>
-          {fetcher.data?.product && (
-            <s-button
-              onClick={() => {
-                shopify.intents.invoke?.("edit:shopify/Product", {
-                  value: fetcher.data?.product?.id,
-                });
-              }}
-              target="_blank"
-              variant="tertiary"
-            >
-              Edit product
-            </s-button>
-          )}
-        </s-stack>
-        {fetcher.data?.product && (
-          <s-section heading="productCreate mutation">
-            <s-stack direction="block" gap="base">
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre
-                  style={{
-                    margin: 0,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                  }}
-                >
-                  <code>{JSON.stringify(fetcher.data.product, null, 2)}</code>
-                </pre>
-              </s-box>
-
-              <s-heading>productVariantsBulkUpdate mutation</s-heading>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre
-                  style={{
-                    margin: 0,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                  }}
-                >
-                  <code>{JSON.stringify(fetcher.data.variant, null, 2)}</code>
-                </pre>
-              </s-box>
-
-              <s-heading>metaobjectUpsert mutation</s-heading>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre
-                  style={{
-                    margin: 0,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                  }}
-                >
-                  <code>
-                    {JSON.stringify(fetcher.data.metaobject, null, 2)}
-                  </code>
-                </pre>
-              </s-box>
-            </s-stack>
-          </s-section>
-        )}
-      </s-section>
-
-      <s-section slot="aside" heading="App template specs">
-        <s-paragraph>
-          <s-text>Framework: </s-text>
-          <s-link href="https://reactrouter.com/" target="_blank">
-            React Router
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Interface: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/app-home/using-polaris-components"
-            target="_blank"
-          >
-            Polaris web components
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>API: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            GraphQL
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Custom data: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/apps/build/custom-data"
-            target="_blank"
-          >
-            Metafields &amp; metaobjects
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Database: </s-text>
-          <s-link href="https://www.prisma.io/" target="_blank">
-            Prisma
-          </s-link>
-        </s-paragraph>
-      </s-section>
-
-      <s-section slot="aside" heading="Next steps">
-        <s-unordered-list>
-          <s-list-item>
-            Build an{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/getting-started/build-app-example"
-              target="_blank"
-            >
-              example app
-            </s-link>
-          </s-list-item>
-          <s-list-item>
-            Explore Shopify&apos;s API with{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/tools/graphiql-admin-api"
-              target="_blank"
-            >
-              GraphiQL
-            </s-link>
-          </s-list-item>
-        </s-unordered-list>
-      </s-section>
-    </s-page>
-  );
+function getStatusBadge(status: string) {
+  switch (status) {
+    case "SCHEDULED":
+      return <Badge tone="info">Scheduled</Badge>;
+    case "OPEN":
+      return <Badge tone="success">Open</Badge>;
+    case "CLOSED":
+      return <Badge>Closed</Badge>;
+    case "DRAWN":
+      return <Badge tone="attention">Drawn</Badge>;
+    case "FULFILLING":
+      return <Badge tone="attention">Fulfilling</Badge>;
+    case "COMPLETED":
+      return <Badge tone="success">Completed</Badge>;
+    case "PURGED":
+      return <Badge tone="warning">Purged</Badge>;
+    case "CANCELLED":
+      return <Badge tone="critical">Cancelled</Badge>;
+    default:
+      return <Badge>{status}</Badge>;
+  }
 }
 
-export const headers: HeadersFunction = (headersArgs) => {
-  return boundary.headers(headersArgs);
-};
+export default function DrawsIndex() {
+  const { draws } = useLoaderData<typeof loader>();
+  const navigate = useNavigate();
+  const submit = useSubmit();
+
+  const handleCancel = (drawId: string, title: string) => {
+    if (confirm(`Are you sure you want to cancel the draw "${title}"?`)) {
+      submit({ intent: "cancel_draw", drawId }, { method: "POST" });
+    }
+  };
+
+  const resourceName = {
+    singular: "draw",
+    plural: "draws",
+  };
+
+  return (
+    <Page
+      title="Raffle & Draw Drops"
+      subtitle="Manage high-demand product drops, hidden inventory allocations, and fair selection draws."
+      primaryAction={{
+        content: "Create Draw",
+        onAction: () => navigate("/app/draws/new"),
+      }}
+    >
+      <Layout>
+        <Layout.Section>
+          {draws.length === 0 ? (
+            <Card>
+              <EmptyState
+                heading="Launch your first high-demand drop"
+                action={{
+                  content: "Create Draw",
+                  onAction: () => navigate("/app/draws/new"),
+                }}
+                image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+              >
+                <p>
+                  Create time-limited, bot-protected product draws. Products remain completely
+                  hidden from your public storefront until winners claim their private orders.
+                </p>
+              </EmptyState>
+            </Card>
+          ) : (
+            <Card padding="0">
+              <IndexTable
+                resourceName={resourceName}
+                itemCount={draws.length}
+                headings={[
+                  { title: "Title" },
+                  { title: "Status" },
+                  { title: "Entry Window" },
+                  { title: "Draw Time" },
+                  { title: "Units" },
+                  { title: "Entries" },
+                  { title: "Actions" },
+                ]}
+                selectable={false}
+              >
+                {draws.map((draw, index) => {
+                  const opensAt = new Date(draw.entryOpensAt).toLocaleString();
+                  const closesAt = new Date(draw.entryClosesAt).toLocaleString();
+                  const drawAt = new Date(draw.drawAt).toLocaleString();
+                  const isScheduled = draw.status === "SCHEDULED";
+                  const canCancel = !["COMPLETED", "PURGED", "CANCELLED"].includes(draw.status);
+
+                  return (
+                    <IndexTable.Row id={draw.id} key={draw.id} position={index}>
+                      <IndexTable.Cell>
+                        <Text variant="bodyMd" fontWeight="bold" as="span">
+                          {draw.title}
+                        </Text>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>{getStatusBadge(draw.status)}</IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <BlockStack gap="050">
+                          <Text variant="bodySm" tone="subdued" as="p">
+                            Open: {opensAt}
+                          </Text>
+                          <Text variant="bodySm" tone="subdued" as="p">
+                            Close: {closesAt}
+                          </Text>
+                        </BlockStack>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Text variant="bodySm" as="span">
+                          {drawAt}
+                        </Text>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Text variant="bodyMd" as="span">
+                          {draw.unitsAvailable}
+                        </Text>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Text variant="bodyMd" as="span">
+                          {draw._count.entries}
+                        </Text>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <InlineStack gap="200">
+                          <Button
+                            size="slim"
+                            onClick={() => navigate(`/app/draws/${draw.id}`)}
+                          >
+                            Details
+                          </Button>
+                          {isScheduled && (
+                            <Button
+                              size="slim"
+                              onClick={() => navigate(`/app/draws/${draw.id}/edit`)}
+                            >
+                              Edit
+                            </Button>
+                          )}
+                          {canCancel && (
+                            <Button
+                              size="slim"
+                              tone="critical"
+                              onClick={() => handleCancel(draw.id, draw.title)}
+                            >
+                              Cancel
+                            </Button>
+                          )}
+                        </InlineStack>
+                      </IndexTable.Cell>
+                    </IndexTable.Row>
+                  );
+                })}
+              </IndexTable>
+            </Card>
+          )}
+        </Layout.Section>
+      </Layout>
+    </Page>
+  );
+}
