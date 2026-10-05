@@ -15,6 +15,43 @@
   color: #202223;
 }
 
+.fairdrops-selector-wrapper {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px dashed #dcdfe3;
+}
+
+.fairdrops-selector-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #5c5f62;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.fairdrops-select {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 15px;
+  font-weight: 500;
+  color: #202223;
+  background-color: #f6f6f7;
+  border: 1px solid #c9cccf;
+  border-radius: 8px;
+  cursor: pointer;
+  appearance: auto;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.fairdrops-select:focus {
+  border-color: #008060;
+  box-shadow: 0 0 0 2px rgba(0, 128, 96, 0.2);
+  background-color: #ffffff;
+}
+
 .fairdrops-header {
   display: flex;
   align-items: center;

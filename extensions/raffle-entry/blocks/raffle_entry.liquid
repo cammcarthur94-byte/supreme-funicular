@@ -12,6 +12,13 @@
   {{ block.shopify_attributes }}
 >
   <div class="fairdrops-card">
+    <div class="fairdrops-selector-wrapper" data-draw-selector-wrapper style="display: none;">
+      <label class="fairdrops-selector-label">Select Raffle Drop:</label>
+      <select class="fairdrops-select" data-draw-select>
+        <option value="">Loading raffles...</option>
+      </select>
+    </div>
+
     <div class="fairdrops-header">
       <span class="fairdrops-badge" data-draw-status>RAFFLE DROP</span>
       <span class="fairdrops-countdown" data-countdown>Entries open soon</span>

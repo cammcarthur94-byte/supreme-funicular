@@ -105,12 +105,75 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     });
   }
 
-  // Support /apps/raffle, /apps/raffle/drop, and /apps/raffle/draw/:id
-  const isDrawRequest = !resource || resource === "drop" || resource === "draw";
+  // Support /apps/raffle, /apps/raffle/drop, /apps/raffle/draw/:id, and /apps/raffle/draws
+  const isDrawRequest = !resource || resource === "drop" || resource === "draw" || resource === "draws";
   if (!isDrawRequest) return proxyJson({ error: "Not found" }, 404);
 
   const shop = await prisma.shop.findUnique({ where: { shopDomain: proxy.shop }, select: { id: true } });
   if (!shop) return proxyJson({ error: "Draw unavailable" }, 404);
+
+  // Return list of all active/scheduled draws for the multi-raffle selector
+  if (resource === "draws") {
+    let draws = await prisma.draw.findMany({
+      where: {
+        shopId: shop.id,
+        status: { in: ["SCHEDULED", "OPEN"] },
+      },
+      orderBy: { entryOpensAt: "asc" },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        entryOpensAt: true,
+        entryClosesAt: true,
+        publicRulesText: true,
+        rules: true,
+      },
+    });
+
+    if (draws.length === 0) {
+      draws = await prisma.draw.findMany({
+        where: { shopId: shop.id },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          entryOpensAt: true,
+          entryClosesAt: true,
+          publicRulesText: true,
+          rules: true,
+        },
+      });
+    }
+
+    const formattedDraws = draws.map((d) => {
+      const rules = eligibilityRulesSchema.safeParse(d.rules);
+      return {
+        id: d.id,
+        title: d.title,
+        status: d.status,
+        entryOpensAt: d.entryOpensAt,
+        entryClosesAt: d.entryClosesAt,
+        publicRulesText: d.publicRulesText,
+        requireAccount: rules.success ? (rules.data.requireAccount !== false) : true,
+        eligibility: rules.success
+          ? {
+              requireVerifiedEmail: rules.data.requireVerifiedEmail,
+              allowedCountries: rules.data.allowedCountries,
+              minAccountAgeDays: rules.data.minAccountAgeDays,
+              requirePhone: rules.data.requirePhone,
+            }
+          : null,
+      };
+    });
+
+    return proxyJson({
+      draws: formattedDraws,
+      customerId: proxy.customerId,
+    });
+  }
 
   const drawId = identifier;
   const draw = (!drawId || drawId === "latest")
