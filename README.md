@@ -227,3 +227,58 @@ Fairdrops guarantees verifiable mathematical fairness and transparency through a
 - **Fewer Entries Than Units**: When eligible entrants are fewer than the available units, every entrant is assigned a winning rank (1..N). Leftover units are recorded as unsold in an audit event (`DRAW_UNSOLD_UNITS_FLAGGED`), alerting the merchant to unallocated stock.
 - **Zero Entries**: If no eligible entries exist when the draw executes, the drop transitions directly to `COMPLETED` and records `DRAW_COMPLETED_ZERO_ENTRIES`, triggering the data purge schedule without failing.
 - **Eligibility Filtering**: Only entries with status `VALID` (or `FLAGGED` with merchant approval) are included in the draw pool. Flagged or disqualified entries are completely excluded.
+
+---
+
+## 🎟️ Winner Allocation, Secure Claim Links & Draft Orders (Phase 9)
+
+Fairdrops manages high-security, one-time checkout allocations for winners without exposing bearer links or allowing unauthorized access:
+
+### 1. Draft Order Creation & Stock Reservation
+- For each selected winner, Fairdrops generates a private Shopify Draft Order via Admin GraphQL (`draftOrderCreate`).
+- **Configuration**:
+  - Quantity: 1
+  - Price: MSRP (strictly zero discounts applied)
+  - Customer Binding: Winner's `customerId` and verified email
+  - Tags & Notes: Tagged with `raffle:<drawId>` and `entry:<entryId>` for webhook identification
+  - **Inventory Reservation**: The `reserveInventoryUntil` timestamp is set to `deadlineAt`, automatically reserving the variant stock in Shopify and releasing it if the deadline lapses.
+
+### 2. Claim Token Security & Bearer Link Protection
+- **No Invoice URLs in Email**: The Draft Order's `invoiceUrl` is a sensitive bearer link that directly bypasses authentication. It is never included in emails or exposed to third parties.
+- **High-Entropy Claim Tokens**: A 32-byte cryptographic random token (`crypto.randomBytes(32).toString("base64url")`) is generated. Only its deterministic SHA-256 hash is saved in `Allocation.claimTokenHash`.
+- **Claim Link Routing**: Winners receive a personalized link to `https://<shop-domain>/apps/raffle/claim/<token>`.
+
+### 3. Claim Endpoint Gating & Verification
+- Hosted via Shopify App Proxy with signature verification (`verifyAppProxyRequest`).
+- **Customer Identity Verification**: Requires `logged_in_customer_id` matching the allocation's `customerGid`. If logged out, redirects to the store's login page with a return URL. If logged in as an account other than the winner, rejects the request.
+- **State & Timing Guards**: Requires allocation status `ISSUED` or `OPENED`, `now < deadlineAt`, and draw status not `CANCELLED`.
+- **Single-Use Transition & Redirection**: Transitions status to `OPENED`, records `openedAt`, and returns a `302` redirect to the draft order `invoiceUrl` with strict privacy headers:
+  - `Cache-Control: no-store`
+  - `Referrer-Policy: no-referrer`
+- **Zero Information Leakage**: Any failure (unknown token, expired link, mismatched customer, cancelled drop) returns a uniform generic response: `Link is invalid or has expired.` with HTTP 404.
+
+### 4. Post-Checkout Region Check & Anti-Circumvention
+- Storefront checkouts cannot reliably block shipping country spoofing when customer accounts have international addresses.
+- **Server-Side Backstop**: When the `orders/create` webhook fires for a raffle draft order, Fairdrops verifies the shipping address country against the draw's `allowedCountries`.
+- If a region violation is detected, Fairdrops immediately calls Admin GraphQL `orderCancel` with `refund: true`, marks the allocation `CANCELLED`, and logs `ALLOCATION_REGION_VIOLATION_CANCELLED` to the `AuditLog`.
+
+### 5. Multi-Unit & Household Prevention
+- Enforces strict one-unit-per-winner limits.
+- When `allowMultipleUnitsPerAddress` is disabled (default), duplicate address hashes across entrants are automatically bypassed during allocation issuance, preventing household hoarding.
+
+### 6. Multi-Merchant Email Architecture & Sender Domains
+Winner notifications are dispatched via a transactional provider (`EmailProvider` interface supporting Resend, Postmark, and local test mocks).
+
+#### Multi-Merchant Sender Domain Configuration Options:
+1. **Shared App Subdomain (Zero-Config, Recommended for Small Merchants)**:
+   - Emails sent from `Fairdrops <drops@mail.fairdrops.app>`.
+   - The merchant's customer support email (e.g. `support@merchantstore.com`) is injected into the `Reply-To` header.
+   - Requires zero DNS setup by the merchant; SPF, DKIM, and DMARC are fully maintained by the Fairdrops platform domain.
+2. **Dedicated Merchant Custom Domain (Enterprise / White-Label)**:
+   - Emails sent from `drops@merchantstore.com`.
+   - The merchant adds three DNS records (supplied in app settings) to their domain registrar:
+     - **SPF**: `v=spf1 include:send.fairdrops.app ~all`
+     - **DKIM**: CNAME record pointing to Fairdrops' Postmark/Resend public key
+     - **DMARC**: `v=DMARC1; p=none; rua=mailto:dmarc-reports@merchantstore.com`
+3. **Bring-Your-Own (BYO) Provider**:
+   - Merchants can configure their own Resend or Postmark API key directly in Fairdrops Settings, routing notifications through their existing corporate email infrastructure.
