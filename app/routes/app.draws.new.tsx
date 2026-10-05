@@ -261,6 +261,12 @@ export default function CreateDraw() {
         allowedCountries,
         minAccountAgeDays: parseInt(minAccountAgeDays, 10) || 0,
         requirePhone,
+        variantOptions: selectedVariants.map((v) => ({
+          variantGid: v.variantGid,
+          title: v.variantTitle || "Default",
+          price: v.msrpPrice,
+          quantity: v.quantity,
+        })),
       },
     };
 

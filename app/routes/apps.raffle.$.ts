@@ -123,6 +123,28 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const shop = await prisma.shop.findUnique({ where: { shopDomain: proxy.shop }, select: { id: true } });
   if (!shop) return proxyJson({ error: "Draw unavailable" }, 404);
 
+function extractVariantOptions(draw: { rules: unknown; variants?: Array<{ variantGid: string; msrpPrice: unknown; quantity: number }> }) {
+  const rulesData = (draw.rules as Record<string, unknown>) || {};
+  const storedVariantOptions = Array.isArray(rulesData.variantOptions)
+    ? (rulesData.variantOptions as Array<{ variantGid: string; title: string; price?: number }>)
+    : [];
+
+  if (storedVariantOptions.length > 0) {
+    return storedVariantOptions.map((opt) => ({
+      variantGid: opt.variantGid,
+      title: opt.title || "Standard",
+      price: opt.price ?? 0,
+    }));
+  }
+
+  const variants = draw.variants || [];
+  return variants.map((v, idx) => ({
+    variantGid: v.variantGid,
+    title: variants.length === 1 ? "Standard / One Size" : `Option ${idx + 1}`,
+    price: Number(v.msrpPrice || 0),
+  }));
+}
+
   // Return list of all active/scheduled draws for the multi-raffle selector
   if (resource === "draws") {
     let draws = await prisma.draw.findMany({
@@ -139,6 +161,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         entryClosesAt: true,
         publicRulesText: true,
         rules: true,
+        variants: {
+          select: { variantGid: true, msrpPrice: true, quantity: true },
+        },
       },
     });
 
@@ -155,6 +180,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           entryClosesAt: true,
           publicRulesText: true,
           rules: true,
+          variants: {
+            select: { variantGid: true, msrpPrice: true, quantity: true },
+          },
         },
       });
     }
@@ -170,6 +198,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         publicRulesText: d.publicRulesText,
         requireAccount: rules.success ? (rules.data.requireAccount !== false) : true,
         formToken: proxy.customerId ? issueFormToken({ drawId: d.id, customerId: proxy.customerId }) : null,
+        variants: extractVariantOptions(d),
         eligibility: rules.success
           ? {
               requireVerifiedEmail: rules.data.requireVerifiedEmail,
@@ -195,11 +224,33 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     ? await prisma.draw.findFirst({
         where: { shopId: shop.id },
         orderBy: { createdAt: "desc" },
-        select: { id: true, title: true, status: true, entryOpensAt: true, entryClosesAt: true, publicRulesText: true, rules: true },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          entryOpensAt: true,
+          entryClosesAt: true,
+          publicRulesText: true,
+          rules: true,
+          variants: {
+            select: { variantGid: true, msrpPrice: true, quantity: true },
+          },
+        },
       })
     : await prisma.draw.findFirst({
         where: { id: drawId, shopId: shop.id },
-        select: { id: true, title: true, status: true, entryOpensAt: true, entryClosesAt: true, publicRulesText: true, rules: true },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          entryOpensAt: true,
+          entryClosesAt: true,
+          publicRulesText: true,
+          rules: true,
+          variants: {
+            select: { variantGid: true, msrpPrice: true, quantity: true },
+          },
+        },
       });
 
   if (!draw) return proxyJson({ error: "Draw unavailable" }, 404);
@@ -226,6 +277,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       publicRulesText: draw.publicRulesText,
       requireAccount: rules.success ? (rules.data.requireAccount !== false) : true,
       formToken,
+      variants: extractVariantOptions(draw),
       eligibility: rules.success ? {
         requireVerifiedEmail: rules.data.requireVerifiedEmail,
         allowedCountries: rules.data.allowedCountries,
@@ -726,8 +778,16 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const normalizedEmailHash = evaluation.normalizedEmailHash || hashNormalizedEmail(customerEmail);
       const rawDrawKey = decrypt(lockedDraw.encryptionKeyId);
 
+      const selectedVariantGid = typeof body.selectedVariantGid === "string" && body.selectedVariantGid.trim().length > 0
+        ? body.selectedVariantGid.trim()
+        : null;
+
       const combinedRiskFlags = [
-        ...new Set([...(evaluation.riskSignals?.geoIpMismatch ? ["GEO_IP_MISMATCH"] : []), ...riskResult.flags]),
+        ...new Set([
+          ...(evaluation.riskSignals?.geoIpMismatch ? ["GEO_IP_MISMATCH"] : []),
+          ...riskResult.flags,
+          ...(selectedVariantGid ? [`SELECTED_VARIANT:${selectedVariantGid}`] : []),
+        ]),
       ];
 
       await tx.entry.create({

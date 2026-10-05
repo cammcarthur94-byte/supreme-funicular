@@ -46,6 +46,9 @@
     const rulesLink = root.querySelector("[data-official-rules]");
     const honeypotEl = root.querySelector("[data-fairdrops-honeypot]");
     const turnstileContainer = root.querySelector("[data-turnstile-container]");
+    const variantsBox = root.querySelector("[data-variants-box]");
+    const variantsGrid = root.querySelector("[data-variants-grid]");
+    const variantSelectedTitleEl = root.querySelector("[data-variant-selected-title]");
 
     let availableDraws = [];
     let currentDraw = null;
@@ -55,6 +58,7 @@
     let turnstileSiteKey = "1x00000000000000000000AA";
     let turnstileToken = null;
     let turnstileWidgetId = null;
+    let selectedVariantGid = null;
 
     const rulesUrl = root.dataset.rulesUrl;
     if (rulesUrl && rulesLink) {
@@ -114,6 +118,19 @@
       }
     };
 
+    const showMessage = (type, text) => {
+      if (!messageEl) return;
+      messageEl.className = `fairdrops-message fairdrops-message-${type}`;
+      messageEl.textContent = text;
+      messageEl.style.display = "flex";
+    };
+
+    const clearMessage = () => {
+      if (!messageEl) return;
+      messageEl.style.display = "none";
+      messageEl.textContent = "";
+    };
+
     const displayDraw = async (draw) => {
       currentDraw = draw;
       if (!draw) return;
@@ -154,8 +171,39 @@
         if (login) login.style.display = "inline-block";
       }
 
-      if (messageEl) {
-        messageEl.textContent = "";
+      clearMessage();
+
+      // Variant / Size Selector setup
+      const variants = draw.variants || [];
+      if (variants.length > 0 && variantsBox && variantsGrid) {
+        variantsGrid.innerHTML = "";
+        selectedVariantGid = variants[0].variantGid;
+        if (variantSelectedTitleEl) {
+          variantSelectedTitleEl.textContent = variants[0].title;
+        }
+
+        variants.forEach((v, index) => {
+          const chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = `fairdrops-variant-chip ${index === 0 ? "fairdrops-variant-chip-selected" : ""}`;
+          chip.dataset.variantGid = v.variantGid;
+          chip.textContent = v.title;
+          chip.addEventListener("click", () => {
+            selectedVariantGid = v.variantGid;
+            variantsGrid.querySelectorAll(".fairdrops-variant-chip").forEach((el) => {
+              el.classList.remove("fairdrops-variant-chip-selected");
+            });
+            chip.classList.add("fairdrops-variant-chip-selected");
+            if (variantSelectedTitleEl) {
+              variantSelectedTitleEl.textContent = v.title;
+            }
+          });
+          variantsGrid.appendChild(chip);
+        });
+        variantsBox.style.display = "block";
+      } else if (variantsBox) {
+        variantsBox.style.display = "none";
+        selectedVariantGid = null;
       }
 
       updateCountdown();
@@ -215,19 +263,6 @@
     const btnSpinner = root.querySelector("[data-btn-spinner]");
     const btnText = root.querySelector("[data-btn-text]");
 
-    const showMessage = (type, text) => {
-      if (!messageEl) return;
-      messageEl.className = `fairdrops-message fairdrops-message-${type}`;
-      messageEl.textContent = text;
-      messageEl.style.display = "flex";
-    };
-
-    const clearMessage = () => {
-      if (!messageEl) return;
-      messageEl.style.display = "none";
-      messageEl.textContent = "";
-    };
-
     const setButtonLoading = (loading) => {
       if (!button) return;
       button.disabled = loading;
@@ -286,6 +321,7 @@
               turnstileToken,
               deviceFingerprintHash,
               website_hp_check: honeypotVal,
+              selectedVariantGid,
             }),
           });
 
@@ -320,7 +356,11 @@
             }
             setButtonLoading(false);
           } else {
-            showMessage("success", "🎉 You're entered! Check your email when the draw completes.");
+            const selectedVariantObj = (currentDraw?.variants || []).find((v) => v.variantGid === selectedVariantGid);
+            const sizeNote = selectedVariantObj && selectedVariantObj.title !== "Standard / One Size"
+              ? ` for size "${selectedVariantObj.title}"`
+              : "";
+            showMessage("success", `🎉 You're entered${sizeNote}! Check your email when the draw completes.`);
             button.style.display = "none";
           }
         } catch (err) {
