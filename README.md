@@ -282,3 +282,33 @@ Winner notifications are dispatched via a transactional provider (`EmailProvider
      - **DMARC**: `v=DMARC1; p=none; rua=mailto:dmarc-reports@merchantstore.com`
 3. **Bring-Your-Own (BYO) Provider**:
    - Merchants can configure their own Resend or Postmark API key directly in Fairdrops Settings, routing notifications through their existing corporate email infrastructure.
+
+---
+
+## ⏳ Automatic Expiry & Waitlist Promotion (Phase 10)
+
+Fairdrops manages the automated lifecycle of claim windows, handling expired allocations, next-winner waitlist promotions, payment-at-deadline races, and draw completion:
+
+### 1. Dual-Tier Scheduling Architecture: QStash Delayed Messages + Sweeper Safety Net
+- **Direct Delayed Message**: When an allocation is issued, a delayed message is dispatched to Upstash QStash set for its exact `deadlineAt` timestamp, targeting the signature-verified `/api/qstash/allocation-expiry` endpoint.
+- **Self-Scheduling Sweeper Safety Net**: To protect against any lost network messages without exceeding Vercel Hobby-tier cron limits (which are limited to once per day), Fairdrops employs a self-scheduling sweeper pattern (`runClaimExpirySweeper`). When active allocations exist, the sweeper evaluates overdue allocations and self-schedules its next check 5 minutes later via QStash. Once all allocations are settled, the sweeper gracefully goes idle.
+
+### 2. Idempotent Expiry & Atomic Promotion Engine
+- **PostgreSQL Row Locks**: Expiry evaluations run inside a database transaction with a row lock (`SELECT ... FOR UPDATE` on `Allocation`), guaranteeing that concurrent invocations or webhook arrivals do not cause double promotions.
+- **Shopify Draft Order Cleanup**: If unpaid at the deadline, Fairdrops calls Admin GraphQL `draftOrderDelete`, releasing the variant's reserved inventory back to the merchant's store.
+- **Atomic Waitlist Promotion**: Fairdrops selects the next eligible entrant (lowest rank value where `status = VALID` or merchant-approved `FLAGGED`) using `SELECT ... FOR UPDATE SKIP LOCKED` on `Entry`. Entrants who have previously received an allocation in this draw are strictly excluded (`NOT EXISTS` check), ensuring no one is promoted twice.
+- **Instant Allocation & Dispatch**: The promoted entrant is immediately issued a new Draft Order with `reserveInventoryUntil`, an unguessable claim token is hashed and stored, their winner email is dispatched, and a new QStash delayed message is scheduled for their claim window.
+
+### 3. Edge Case Handling: Payment-at-Deadline Race Condition
+- If a customer completes their checkout right as their claim deadline arrives, an automated draft order deletion could orphan an authorized order.
+- Before deleting any draft order or marking an allocation expired, Fairdrops queries Shopify Admin GraphQL (`getDraftOrder`).
+- If Shopify reports the draft order `COMPLETED` or `displayFinancialStatus === "PAID"`, the **payment wins the race**: the draft order is preserved, the allocation transitions to `PURCHASED`, and an audit event (`ALLOCATION_PURCHASED_AT_DEADLINE_RACE`) is logged.
+
+### 4. Waitlist Exhaustion & Draw Completion
+- **Waitlist Exhaustion**: When an allocation expires and no eligible entries remain on the waitlist, remaining units are recorded as unsold in the `AuditLog` (`DRAW_WAITLIST_EXHAUSTED`), and the merchant is alerted.
+- **Draw Completion**: When all units have been claimed and paid, or all active allocations have concluded with an exhausted waitlist, the drop automatically transitions to `COMPLETED` and logs `DRAW_COMPLETED`.
+
+### 5. Webhook Idempotency & Order Reconciliation
+- **Webhook Handlers**: Fairdrops listens to `orders/paid` and `orders/create` to reconcile purchases.
+- **Idempotency Storage**: Every processed Shopify webhook ID (`X-Shopify-Webhook-Id`) is persisted in the `WebhookEvent` table with a unique constraint. Duplicate webhook retries from Shopify are acknowledged with HTTP 200 without re-processing state or creating duplicate audit logs.
+

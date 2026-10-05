@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate, unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
+import { recordAllocationPurchase } from "../services/claimExpiry.server";
 
 const ORDER_CANCEL_MUTATION = `#graphql
   mutation orderCancel($orderId: ID!, $reason: OrderCancelReason!, $refund: Boolean!) {
@@ -71,6 +72,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       ? (rules.allowedCountries as unknown[]).map((c) => String(c).toUpperCase())
       : [];
 
+    // Check webhook idempotency
+    const webhookEventId = request.headers.get("x-shopify-webhook-id") || undefined;
+    if (webhookEventId) {
+      const existing = await prisma.webhookEvent.findUnique({
+        where: { eventId: webhookEventId },
+      });
+      if (existing) {
+        return new Response("Already processed", { status: 200 });
+      }
+    }
+
     // Verify shipping country against draw eligibility rules (Requirement 5)
     if (allowedCountries.length > 0 && (!shippingCountryCode || !allowedCountries.includes(shippingCountryCode))) {
       console.warn(
@@ -109,6 +121,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         data: { status: "CANCELLED" },
       });
 
+      if (webhookEventId) {
+        await prisma.webhookEvent.create({
+          data: {
+            shopId: shopRecord.id,
+            eventId: webhookEventId,
+            topic,
+          },
+        }).catch(() => {});
+      }
+
       await prisma.auditLog.create({
         data: {
           shopId: shopRecord.id,
@@ -128,31 +150,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return new Response("Order cancelled for region violation", { status: 200 });
     }
 
-    // Valid purchase! Update allocation status to PURCHASED
-    await prisma.allocation.update({
-      where: { id: allocation.id },
-      data: {
-        status: "PURCHASED",
-        purchasedAt: new Date(),
-      },
-    });
-
+    // Valid purchase! Update allocation status to PURCHASED and complete draw if finished
     const customerObj = (payloadObj.customer as Record<string, unknown>) || {};
-    await prisma.auditLog.create({
-      data: {
-        shopId: shopRecord.id,
-        drawId: allocation.drawId,
-        eventType: "ALLOCATION_PURCHASED",
-        actor: `customer:${customerObj.id || "unknown"}`,
-        metadata: {
-          allocationId: allocation.id,
-          orderId,
-          shippingCountryCode,
-        },
-      },
+    await recordAllocationPurchase({
+      shopDomain: shop,
+      orderId: String(orderId),
+      tags,
+      note,
+      webhookEventId,
+      topic,
+      customerId: customerObj.id ? String(customerObj.id) : undefined,
+      shippingCountryCode,
     });
 
-    console.log(`[Webhook:${topic}] Allocation ${allocation.id} successfully marked PURCHASED.`);
+    console.log(`[Webhook:${topic}] Allocation ${allocation.id} successfully processed.`);
     return new Response("OK", { status: 200 });
   } catch (err) {
     console.error(`[Webhook:${topic}] Error processing order webhook:`, err);
