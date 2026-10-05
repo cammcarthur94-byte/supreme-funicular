@@ -1,8 +1,8 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
-import { decrypt, encrypt, hashIdentifier } from "../services/encryption";
-import { checkEntryEligibility, getAccountEligibility } from "../services/eligibility.server";
+import { decrypt, encrypt } from "../services/encryption";
+import { evaluateEligibility, hashNormalizedEmail } from "../services/eligibility";
 import { proxyJson, verifyAppProxyRequest } from "../services/appProxy.server";
 import { unauthenticated } from "../shopify.server";
 import { eligibilityRulesSchema } from "../validation/drawValidation";
@@ -32,7 +32,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       entryOpensAt: draw.entryOpensAt,
       entryClosesAt: draw.entryClosesAt,
       publicRulesText: draw.publicRulesText,
-      requireAccount: getAccountEligibility(),
+      requireAccount: rules.success ? (rules.data.requireAccount !== false) : true,
       eligibility: rules.success ? {
         requireVerifiedEmail: rules.data.requireVerifiedEmail,
         allowedCountries: rules.data.allowedCountries,
@@ -123,25 +123,48 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
       const parsedRules = eligibilityRulesSchema.safeParse(lockedDraw.rules);
       if (!parsedRules.success) throw new Error("Draw eligibility configuration is invalid");
-      const eligibility = checkEntryEligibility(parsedRules.data, {
-        email,
-        emailVerified: customer.verifiedEmail,
-        countryCode: customer.defaultAddress?.countryCodeV2 ?? null,
-        createdAt: new Date(customer.createdAt),
-        phone: customer.defaultPhoneNumber?.phoneNumber ?? null,
-      }, now);
-      if (!eligibility.eligible) return { status: 422 as const, body: { error: eligibility.message } };
 
-      const normalizedEmail = email.trim().toLowerCase();
+      const geoCountry = request.headers.get("x-country-code") || request.headers.get("cf-ipcountry");
+      const clientIp = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+
+      const evaluation = evaluateEligibility(
+        parsedRules.data,
+        {
+          customerId: proxy.customerId,
+          email,
+          verifiedEmail: customer.verifiedEmail,
+          countryCode: customer.defaultAddress?.countryCodeV2 ?? null,
+          createdAt: customer.createdAt,
+          phone: customer.defaultPhoneNumber?.phoneNumber ?? null,
+        },
+        { now, geoCountry, clientIp }
+      );
+
+      if (!evaluation.eligible) {
+        return {
+          status: 422 as const,
+          body: { error: evaluation.userMessage, reasonCode: evaluation.reasonCode },
+        };
+      }
+
+      const normalizedEmail = evaluation.normalizedEmail || email.trim().toLowerCase();
+      const normalizedEmailHash = evaluation.normalizedEmailHash || hashNormalizedEmail(email);
       const rawDrawKey = decrypt(lockedDraw.encryptionKeyId);
+
+      const riskFlags: string[] = [];
+      if (evaluation.riskSignals?.geoIpMismatch) {
+        riskFlags.push("GEO_IP_MISMATCH");
+      }
+
       await tx.entry.create({
         data: {
           shopId: shop.id,
           drawId: lockedDraw.id,
           customerGid: customer.id,
-          normalizedEmailHash: hashIdentifier(normalizedEmail),
+          normalizedEmailHash,
           emailEncrypted: encrypt(normalizedEmail, Buffer.from(rawDrawKey, "base64")),
           countryCode: customer.defaultAddress?.countryCodeV2 ?? null,
+          riskFlags,
         },
       });
       return { status: 201 as const, body: { success: true, message: "Your entry has been submitted." } };
