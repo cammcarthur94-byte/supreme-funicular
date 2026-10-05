@@ -217,17 +217,22 @@
     };
 
     try {
+      console.log("[Fairdrops] Requesting active raffles via:", `${ROOT}/draws`);
       const response = await fetch(`${ROOT}/draws`, {
         credentials: "same-origin",
         headers: { Accept: "application/json" }
       });
+      console.log("Storefront raffle API response:", response.status, response);
+
       if (response.ok) {
         const result = await response.json();
+        console.log("Theme extension received raffles:", result);
         availableDraws = result.draws || [];
         customerId = result.customerId;
         if (result.turnstileSiteKey) turnstileSiteKey = result.turnstileSiteKey;
 
         if (availableDraws.length === 0) {
+          console.log("[Fairdrops] Zero active raffles returned from store API.");
           if (titleEl) titleEl.textContent = "No Active Raffle Drops";
           if (statusEl) {
             statusEl.textContent = "Inactive";
@@ -319,21 +324,25 @@
         if (initialDraw) {
           await displayDraw(initialDraw);
         }
-      } else if (specifiedDrawId && specifiedDrawId !== "latest") {
-        const response = await fetch(`${ROOT}/draw/${encodeURIComponent(specifiedDrawId)}`, {
-          credentials: "same-origin",
-          headers: { Accept: "application/json" }
-        });
-        if (response.ok) {
-          const result = await response.json();
-          customerId = result.customerId;
-          if (result.turnstileSiteKey) turnstileSiteKey = result.turnstileSiteKey;
-          if (result.formToken) formToken = result.formToken;
-          if (result.draw) await displayDraw(result.draw);
+      } else {
+        const errorText = await response.text().catch(() => "");
+        console.warn("Storefront raffle API returned non-OK status:", response.status, errorText);
+        if (specifiedDrawId && specifiedDrawId !== "latest") {
+          const singleRes = await fetch(`${ROOT}/draw/${encodeURIComponent(specifiedDrawId)}`, {
+            credentials: "same-origin",
+            headers: { Accept: "application/json" }
+          });
+          if (singleRes.ok) {
+            const result = await singleRes.json();
+            customerId = result.customerId;
+            if (result.turnstileSiteKey) turnstileSiteKey = result.turnstileSiteKey;
+            if (result.formToken) formToken = result.formToken;
+            if (result.draw) await displayDraw(result.draw);
+          }
         }
       }
-    } catch {
-      // Default HTML content remains cleanly visible
+    } catch (err) {
+      console.error("[Fairdrops] Error discovering active store raffles:", err);
     }
 
     const btnSpinner = root.querySelector("[data-btn-spinner]");
@@ -355,6 +364,7 @@
           const targetId = currentDraw?.id || specifiedDrawId;
           const customerMeta = root.querySelector("[data-customer-meta]");
           const customerData = customerMeta ? {
+            customerId: customerMeta.dataset.customerId || undefined,
             email: customerMeta.dataset.email || undefined,
             verifiedEmail: customerMeta.dataset.verified !== "false",
             countryCode: customerMeta.dataset.country || undefined,

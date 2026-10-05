@@ -19,7 +19,7 @@ export async function verifyTurnstileToken(params: {
     return { success: false, errorCodes: ["missing-input-response"] };
   }
 
-  const secret = params.secretKey || process.env.TURNSTILE_SECRET_KEY;
+  const secret = params.secretKey || process.env.TURNSTILE_SECRET_KEY || (process.env.NODE_ENV !== "production" ? "1x0000000000000000000000000000000AA" : undefined);
 
   // In test or local dev without a configured key, allow Cloudflare test key or mock bypass
   if (!secret) {

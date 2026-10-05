@@ -213,7 +213,7 @@ describe("Tenant Isolation & Cross-Shop Security Audit (Item 8a)", { timeout: 30
 
       expect(response.status).toBe(404);
       const json = await response.json();
-      expect(json.error).toBe("Draw unavailable");
+      expect(json.error).toMatch(/Draw (not found|unavailable)/);
 
       // Verify no entry was created
       const entries = await prisma.entry.findMany({ where: { drawId: drawA.id } });

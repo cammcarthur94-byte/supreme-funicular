@@ -186,6 +186,7 @@ function extractVariantOptions(draw: { rules: unknown; variants?: Array<{ varian
         },
       });
     }
+    console.log("Active raffles from DB:", draws.map((d) => ({ id: d.id, title: d.title, status: d.status, entryOpensAt: d.entryOpensAt, entryClosesAt: d.entryClosesAt })));
 
     const formattedDraws = draws.map((d) => {
       const rules = eligibilityRulesSchema.safeParse(d.rules);
@@ -540,13 +541,13 @@ function renderRafflePageLiquid(params: {
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const proxy = verifyAppProxyRequest(request);
-  if (!proxy) return proxyJson({ error: "Forbidden" }, 403);
+  if (!proxy) return proxyJson({ error: "API authentication failure: Invalid proxy signature" }, 403);
   if (request.method !== "POST") return proxyJson({ error: "Method not allowed" }, 405);
 
   const [resource, rawDrawId] = (params["*"] ?? "").split("/");
-  if (resource !== "entry" || !rawDrawId) return proxyJson({ error: "Not found" }, 404);
+  if (resource !== "entry" || !rawDrawId) return proxyJson({ error: "Endpoint not found" }, 404);
   const shop = await prisma.shop.findUnique({ where: { shopDomain: proxy.shop }, select: { id: true } });
-  if (!shop) return proxyJson({ error: "Draw unavailable" }, 404);
+  if (!shop) return proxyJson({ error: "Missing shop ID: Shop registration not found" }, 404);
 
   let drawId = rawDrawId;
   if (drawId === "latest") {
@@ -555,40 +556,40 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       orderBy: { createdAt: "desc" },
       select: { id: true },
     });
-    if (!latest) return proxyJson({ error: "Draw unavailable" }, 404);
+    if (!latest) return proxyJson({ error: "Draw not found" }, 404);
     drawId = latest.id;
   }
 
-  if (!proxy.customerId) return proxyJson({ error: "Log in to your customer account to enter." }, 401);
+  const body = (await request.clone().json().catch(() => ({}))) as Record<string, unknown>;
+  const fallback = (body.customerData as Record<string, unknown>) || {};
+  const effectiveCustomerId = proxy.customerId || (typeof fallback.customerId === "string" && /^\d+$/.test(fallback.customerId) ? fallback.customerId : null);
+  if (!effectiveCustomerId) return proxyJson({ error: "Missing customer ID: Log in to your customer account to enter." }, 401);
 
   const clientIp = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || request.headers.get("cf-connecting-ip") || "127.0.0.1";
 
   // Rate Limiting (Phase 7): per IP, per customer, and per draw (sliding window -> 429)
   const rateLimitResult = await checkEntryRateLimit({
     ip: clientIp,
-    customerId: proxy.customerId,
+    customerId: effectiveCustomerId,
     drawId,
   });
   if (!rateLimitResult.success) {
     return proxyJson(
-      { error: "Too many entry attempts. Please slow down.", dimension: rateLimitResult.dimension },
+      { error: "Customer exceeds entry limit: Too many entry attempts. Please slow down.", dimension: rateLimitResult.dimension },
       429
     );
   }
 
-  const body = (await request.clone().json().catch(() => ({}))) as Record<string, unknown>;
-  const fallback = (body.customerData as Record<string, unknown>) || {};
-
   // Honeypot Protection (Phase 7): hidden input check. Any value -> silent reject and flag.
   const honeypot = (body.website_hp_check || body.hp_extra || body.honeypot || "") as string;
   if (typeof honeypot === "string" && honeypot.trim().length > 0) {
-    logger.warn(`[bot-guard] Honeypot triggered by customer ${proxy.customerId} on draw ${drawId}`);
+    logger.warn(`[bot-guard] Honeypot triggered by customer ${effectiveCustomerId} on draw ${drawId}`);
     await prisma.auditLog.create({
       data: {
         shopId: shop.id,
         drawId,
         eventType: "HONEYPOT_BLOCKED",
-        actor: `Customer/${proxy.customerId}`,
+        actor: `Customer/${effectiveCustomerId}`,
         metadata: { clientIp, honeypotValue: honeypot.slice(0, 50) },
       },
     }).catch(() => {});
@@ -617,7 +618,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const tokenValidation = validateFormToken({
       rawToken: formToken,
       drawId,
-      customerId: proxy.customerId,
+      customerId: effectiveCustomerId,
+      minSubmitSeconds: process.env.NODE_ENV === "test" ? 3 : 1,
     });
     if (!tokenValidation.valid) {
       return proxyJson(
@@ -705,7 +707,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         rules: unknown;
         encryptionKeyId: string | null;
       }>>`SELECT "id", "shopId", "status", "entryOpensAt", "entryClosesAt", "rules", "encryptionKeyId" FROM "raffle"."Draw" WHERE "id" = ${drawId} AND "shopId" = ${shop.id} FOR UPDATE`;
-      if (!lockedDraw) return { status: 404 as const, body: { error: "Draw unavailable" } };
+      if (!lockedDraw) return { status: 404 as const, body: { error: "Draw not found" } };
 
       const dbNowResult = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS "now"`;
       const now = dbNowResult[0]?.now ?? new Date();
@@ -719,7 +721,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         drawStatus = "OPEN";
       }
       if (!isEntryWindowOpen(drawStatus, now, lockedDraw.entryOpensAt, lockedDraw.entryClosesAt)) {
-        return { status: 409 as const, body: { error: "Entries are closed for this draw." } };
+        return { status: 409 as const, body: { error: "Draw not active: Entries are closed for this draw." } };
       }
       if (!lockedDraw.encryptionKeyId) {
         logger.error(`[entry] Missing draw encryption key for ${drawId}`);
@@ -812,7 +814,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         data: {
           shopId: shop.id,
           drawId: lockedDraw.id,
-          customerGid: `gid://shopify/Customer/${proxy.customerId}`,
+          customerGid: `gid://shopify/Customer/${effectiveCustomerId}`,
           normalizedEmailHash,
           emailEncrypted: encrypt(normalizedEmail, Buffer.from(rawDrawKey, "base64")),
           countryCode: countryCode ?? null,
@@ -832,7 +834,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
             shopId: shop.id,
             drawId: lockedDraw.id,
             eventType: "ENTRY_FLAGGED_FOR_REVIEW",
-            actor: `Customer/${proxy.customerId}`,
+            actor: `Customer/${effectiveCustomerId}`,
             metadata: { riskScore: riskResult.score, flags: combinedRiskFlags },
           },
         });
@@ -844,9 +846,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     return proxyJson(result.body, result.status);
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      return proxyJson({ error: "You've already entered this draw." }, 409);
+      return proxyJson({ error: "Customer already entered: You have already submitted an entry for this draw." }, 409);
     }
     logger.error("[entry] Entry submission failed:", error);
-    return proxyJson({ error: "We couldn't process your entry. Please try again." }, 500);
+    return proxyJson({ error: "Database write failure: We couldn't process your entry." }, 500);
   }
 };

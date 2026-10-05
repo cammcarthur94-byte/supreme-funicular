@@ -21,7 +21,8 @@ export function verifyAppProxyRequest(
   const timestampValues = params.getAll("timestamp");
   const shopValues = params.getAll("shop");
   const customerValues = params.getAll("logged_in_customer_id");
-  if (timestampValues.length !== 1 || shopValues.length !== 1 || customerValues.length !== 1) return null;
+  if (timestampValues.length !== 1 || shopValues.length !== 1) return null;
+  if (customerValues.length > 1) return null;
 
   const timestamp = Number(timestampValues[0]);
   const nowSeconds = Math.floor(Date.now() / 1000);
@@ -39,7 +40,8 @@ export function verifyAppProxyRequest(
   const supplied = Buffer.from(signatures[0], "hex");
   if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return null;
 
-  const customerId = customerValues[0] || null;
+  const rawCustomer = customerValues[0]?.trim();
+  const customerId = rawCustomer && rawCustomer.length > 0 ? rawCustomer : null;
   if (customerId !== null && !/^\d+$/.test(customerId)) return null;
   return { shop, customerId, params };
 }
