@@ -105,15 +105,34 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     });
   }
 
-  const drawId = identifier;
-  if (resource !== "draw" || !drawId) return proxyJson({ error: "Not found" }, 404);
+  // Support /apps/raffle, /apps/raffle/drop, and /apps/raffle/draw/:id
+  const isDrawRequest = !resource || resource === "drop" || resource === "draw";
+  if (!isDrawRequest) return proxyJson({ error: "Not found" }, 404);
+
   const shop = await prisma.shop.findUnique({ where: { shopDomain: proxy.shop }, select: { id: true } });
   if (!shop) return proxyJson({ error: "Draw unavailable" }, 404);
-  const draw = await prisma.draw.findFirst({
-    where: { id: drawId, shopId: shop.id },
-    select: { id: true, title: true, status: true, entryOpensAt: true, entryClosesAt: true, publicRulesText: true, rules: true },
-  });
+
+  const drawId = identifier;
+  const draw = (!drawId || drawId === "latest")
+    ? await prisma.draw.findFirst({
+        where: { shopId: shop.id },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, title: true, status: true, entryOpensAt: true, entryClosesAt: true, publicRulesText: true, rules: true },
+      })
+    : await prisma.draw.findFirst({
+        where: { id: drawId, shopId: shop.id },
+        select: { id: true, title: true, status: true, entryOpensAt: true, entryClosesAt: true, publicRulesText: true, rules: true },
+      });
+
   if (!draw) return proxyJson({ error: "Draw unavailable" }, 404);
+
+  const isHtml = !resource || request.headers.get("accept")?.includes("text/html");
+  if (isHtml) {
+    return new Response(renderRafflePageLiquid({ draw, customerId: proxy.customerId }), {
+      status: 200,
+      headers: { "Content-Type": "application/liquid" },
+    });
+  }
 
   const rules = eligibilityRulesSchema.safeParse(draw.rules);
   return proxyJson({
@@ -136,15 +155,177 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   });
 };
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function renderRafflePageLiquid(params: {
+  draw: {
+    id: string;
+    title: string;
+    status: string;
+    entryOpensAt: Date;
+    entryClosesAt: Date;
+    publicRulesText: string | null;
+    rules: unknown;
+  };
+  customerId: string | null;
+}) {
+  const rules = eligibilityRulesSchema.safeParse(params.draw.rules);
+  const requirementList: string[] = [];
+  if (rules.success) {
+    if (rules.data.requireVerifiedEmail) requirementList.push("Verified email required");
+    if (rules.data.requirePhone) requirementList.push("Phone number required");
+    if (rules.data.minAccountAgeDays && rules.data.minAccountAgeDays > 0) {
+      requirementList.push(`Account must be at least ${rules.data.minAccountAgeDays} days old`);
+    }
+    if (rules.data.allowedCountries && rules.data.allowedCountries.length > 0) {
+      requirementList.push(`Eligible shipping countries: ${rules.data.allowedCountries.join(", ")}`);
+    }
+  }
+
+  return `
+<div class="fairdrops-storefront-wrapper" style="max-width: 680px; margin: 40px auto; padding: 0 16px; font-family: inherit;">
+  <div style="background: #ffffff; border: 1px solid #e1e3e5; border-radius: 12px; padding: 32px; box-shadow: 0 4px 16px rgba(0,0,0,0.06);">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+      <span style="display: inline-block; background: #e4f0d5; color: #23541a; font-size: 13px; font-weight: 600; padding: 4px 12px; border-radius: 16px; text-transform: uppercase;">
+        ${escapeHtml(params.draw.status)}
+      </span>
+      <span id="fairdrops-countdown" style="font-size: 14px; color: #5c5f62; font-weight: 600;">Calculating...</span>
+    </div>
+
+    <h1 style="font-size: 28px; font-weight: 700; margin: 0 0 16px 0; color: #202223; line-height: 1.2;">
+      ${escapeHtml(params.draw.title)}
+    </h1>
+
+    <div style="margin-bottom: 24px;">
+      <h3 style="font-size: 15px; font-weight: 600; color: #202223; margin: 0 0 8px 0;">Eligibility Requirements</h3>
+      <ul style="margin: 0; padding-left: 20px; color: #44474a; line-height: 1.6; font-size: 14px;">
+        ${requirementList.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}
+      </ul>
+      ${
+        params.draw.publicRulesText
+          ? `<p style="margin-top: 12px; font-size: 13px; color: #6d7175; font-style: italic;">${escapeHtml(params.draw.publicRulesText)}</p>`
+          : ""
+      }
+    </div>
+
+    <div id="fairdrops-entry-box" style="border-top: 1px solid #e1e3e5; padding-top: 24px;">
+      ${
+        params.customerId
+          ? `
+        <button id="fairdrops-submit-btn" style="width: 100%; background: #008060; color: #ffffff; border: none; padding: 14px 24px; font-size: 16px; font-weight: 600; border-radius: 8px; cursor: pointer;">
+          Enter This Draw
+        </button>
+        <p id="fairdrops-entry-msg" style="margin-top: 12px; font-size: 14px; text-align: center; display: none;"></p>
+      `
+          : `
+        <div style="text-align: center;">
+          <p style="margin-bottom: 16px; color: #5c5f62; font-size: 14px;">You must be signed in to your customer account to enter.</p>
+          <a href="/account/login?return_url={{ request.path | url_encode }}" style="display: inline-block; background: #202223; color: #ffffff; text-decoration: none; padding: 12px 24px; font-size: 15px; font-weight: 600; border-radius: 8px;">
+            Log in / Create account to enter
+          </a>
+        </div>
+      `
+      }
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const opensAt = new Date("${params.draw.entryOpensAt.toISOString()}").getTime();
+  const closesAt = new Date("${params.draw.entryClosesAt.toISOString()}").getTime();
+  const countdownEl = document.getElementById("fairdrops-countdown");
+  const btn = document.getElementById("fairdrops-submit-btn");
+  const msgEl = document.getElementById("fairdrops-entry-msg");
+
+  function fmt(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return (d > 0 ? d + "d " : "") + h + "h " + m + "m " + sec + "s";
+  }
+
+  function update() {
+    const now = Date.now();
+    if (now < opensAt) {
+      countdownEl.textContent = "Entries open in " + fmt(opensAt - now);
+      if (btn) btn.disabled = true;
+    } else if (now < closesAt) {
+      countdownEl.textContent = "Entries close in " + fmt(closesAt - now);
+      if (btn) btn.disabled = false;
+    } else {
+      countdownEl.textContent = "Entries are closed";
+      if (btn) btn.disabled = true;
+    }
+  }
+  update();
+  setInterval(update, 1000);
+
+  if (btn) {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Submitting entry...";
+      try {
+        const res = await fetch("/apps/raffle/entry/${params.draw.id}", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin"
+        });
+        const data = await res.json();
+        msgEl.style.display = "block";
+        if (res.ok && data.success) {
+          msgEl.style.color = "#008060";
+          msgEl.textContent = "🎉 You're entered! Check your email when the draw completes.";
+          btn.style.display = "none";
+        } else {
+          msgEl.style.color = "#d72c0d";
+          msgEl.textContent = data.userMessage || data.error || "Entry failed. Please check requirements.";
+          btn.disabled = false;
+          btn.textContent = "Enter This Draw";
+        }
+      } catch (err) {
+        msgEl.style.display = "block";
+        msgEl.style.color = "#d72c0d";
+        msgEl.textContent = "Error submitting entry. Please try again.";
+        btn.disabled = false;
+        btn.textContent = "Enter This Draw";
+      }
+    });
+  }
+})();
+</script>
+`;
+}
+
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const proxy = verifyAppProxyRequest(request);
   if (!proxy) return proxyJson({ error: "Forbidden" }, 403);
   if (request.method !== "POST") return proxyJson({ error: "Method not allowed" }, 405);
 
-  const [resource, drawId] = (params["*"] ?? "").split("/");
-  if (resource !== "entry" || !drawId) return proxyJson({ error: "Not found" }, 404);
+  const [resource, rawDrawId] = (params["*"] ?? "").split("/");
+  if (resource !== "entry" || !rawDrawId) return proxyJson({ error: "Not found" }, 404);
   const shop = await prisma.shop.findUnique({ where: { shopDomain: proxy.shop }, select: { id: true } });
   if (!shop) return proxyJson({ error: "Draw unavailable" }, 404);
+
+  let drawId = rawDrawId;
+  if (drawId === "latest") {
+    const latest = await prisma.draw.findFirst({
+      where: { shopId: shop.id },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+    if (!latest) return proxyJson({ error: "Draw unavailable" }, 404);
+    drawId = latest.id;
+  }
 
   try {
     const result = await prisma.$transaction(async (tx) => {

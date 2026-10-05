@@ -1,4 +1,7 @@
 {% assign raffle_id = block.settings.draw_id | strip %}
+{% if raffle_id == blank %}
+  {% assign raffle_id = "latest" %}
+{% endif %}
 <div
   class="fairdrops-entry"
   data-fairdrops-entry
@@ -6,11 +9,8 @@
   data-rules-url="{{ block.settings.rules_url | escape }}"
   {{ block.shopify_attributes }}
 >
-  {% if raffle_id == blank %}
-    <p>Select a draw ID in this block's settings to display its entry form.</p>
-  {% else %}
-    <p data-entry-status role="status" aria-live="polite">Loading draw…</p>
-    <div data-entry-content hidden>
+  <p data-entry-status role="status" aria-live="polite">Loading draw…</p>
+  <div data-entry-content hidden>
       <h2 data-draw-title></h2>
       <p data-countdown></p>
       <div data-requirements></div>
@@ -19,7 +19,6 @@
       <a data-login-link href="{{ routes.account_login_url }}?return_url={{ request.path | url_encode }}" hidden>Log in / create account to enter</a>
       <button type="button" data-entry-button disabled>Enter this draw</button>
     </div>
-  {% endif %}
 </div>
 
 {% if raffle_id != blank %}
