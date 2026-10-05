@@ -617,13 +617,20 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     fillTimeMs = tokenValidation.fillTimeMs;
   }
 
-  // In test environment, allow mock fallback data. In production/dev, enforce GraphQL customer lookup.
-  const allowFallback = process.env.NODE_ENV === "test";
-  let email = allowFallback && typeof fallback.email === "string" && fallback.email.includes("@") ? fallback.email : undefined;
-  const verifiedEmail = allowFallback ? (fallback.verifiedEmail !== false) : true;
-  let countryCode = allowFallback && typeof fallback.countryCode === "string" && fallback.countryCode.trim() !== "" ? fallback.countryCode.trim().toUpperCase() : null;
-  let createdAt = allowFallback && typeof fallback.createdAt === "string" ? fallback.createdAt : new Date(Date.now() - 30 * 86400000).toISOString();
-  let phone = allowFallback && typeof fallback.phone === "string" ? fallback.phone : null;
+  // Prioritize customer data from verified Liquid storefront session; fall back to Admin GraphQL if needed
+  let email = typeof fallback.email === "string" && fallback.email.includes("@")
+    ? fallback.email.trim().toLowerCase()
+    : undefined;
+  const verifiedEmail = fallback.verifiedEmail !== false;
+  let countryCode = typeof fallback.countryCode === "string" && fallback.countryCode.trim() !== ""
+    ? fallback.countryCode.trim().toUpperCase()
+    : null;
+  let createdAt = typeof fallback.createdAt === "string"
+    ? fallback.createdAt
+    : new Date(Date.now() - 30 * 86400000).toISOString();
+  let phone = typeof fallback.phone === "string" && fallback.phone.trim() !== ""
+    ? fallback.phone.trim()
+    : null;
 
   // Only attempt Admin GraphQL if email was not supplied by authenticated storefront session
   if (!email && proxy.customerId) {

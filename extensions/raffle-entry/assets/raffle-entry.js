@@ -331,10 +331,28 @@
             responseText = await entryResponse.text();
             payload = JSON.parse(responseText);
           } catch {
-            console.error("Non-JSON entry response:", entryResponse.status, responseText);
-            payload = {
-              error: "Unable to submit your entry right now. The server is temporarily reconnecting. Please refresh and try again."
-            };
+            console.error("Non-JSON entry response:", entryResponse.status, responseText.slice(0, 200));
+            if (entryResponse.status === 405) {
+              payload = {
+                error: "The raffle proxy is syncing with Shopify. Please refresh this page in a moment."
+              };
+            } else if (entryResponse.status === 404) {
+              payload = {
+                error: "This raffle drop is currently unavailable. Please refresh or check back soon."
+              };
+            } else if (entryResponse.status === 401 || entryResponse.status === 403) {
+              payload = {
+                error: "Customer session verification failed. Please refresh the page to sign in again."
+              };
+            } else if (entryResponse.status >= 500) {
+              payload = {
+                error: "The server is momentarily busy. Please try again in a few moments."
+              };
+            } else {
+              payload = {
+                error: "Unable to submit entry (Status " + entryResponse.status + "). Please refresh and try again."
+              };
+            }
           }
 
           if (!entryResponse.ok) {
