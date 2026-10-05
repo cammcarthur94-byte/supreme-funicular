@@ -37,7 +37,8 @@ api_version = "2025-01"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_customers,read_inventory,read_locations,read_orders,read_products,write_draft_orders,write_products"
+# Least-privilege set: removed unused read_inventory and read_locations
+scopes = "read_customers,read_orders,read_products,write_draft_orders,write_products"
 
 [auth]
 redirect_urls = [ "https://fairdrops.onrender.com/auth/callback" ]

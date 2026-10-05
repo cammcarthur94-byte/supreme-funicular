@@ -1,0 +1,42 @@
+config:
+  target: "https://{{ $processEnvironment.SHOPIFY_APP_URL || 'http://localhost:3000' }}"
+  phases:
+    - name: "Warmup"
+      duration: 10
+      arrivalRate: 20
+    - name: "Sustained High Traffic (10,000 entries in 60s)"
+      duration: 60
+      arrivalRate: 166 # ~10,000 requests over 60 seconds
+      rampTo: 200
+    - name: "Closing Second Burst"
+      duration: 5
+      arrivalRate: 500 # Intense burst right at the closing window
+  defaults:
+    headers:
+      Content-Type: "application/json"
+      Accept: "application/json"
+  variables:
+    drawId: "test-draw-10k-load"
+
+scenarios:
+  - name: "Raffle Entry Submission"
+    flow:
+      - post:
+          url: "/apps/raffle/entry/{{ drawId }}"
+          json:
+            formToken: "simulated_form_token_{{ $randomNumber(1, 100000) }}"
+            deviceFingerprintHash: "fp_{{ $randomNumber(1000000, 9999999) }}"
+            turnstileToken: "mock_turnstile_pass"
+            website_hp_check: ""
+            customerData:
+              email: "entrant_{{ $randomNumber(1, 20000) }}@example.com"
+              verifiedEmail: true
+              countryCode: "US"
+          capture:
+            - json: "$.success"
+              as: "entrySuccess"
+          expect:
+            - statusCode:
+                - 201 # Created successfully before close
+                - 409 # Rejected due to duplicate or window closed
+                - 429 # Rate limited (expected under extreme bot spam)

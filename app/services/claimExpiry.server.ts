@@ -680,7 +680,10 @@ export async function recordAllocationPurchase(
 
     if (params.draftOrderGid) {
       allocation = await tx.allocation.findFirst({
-        where: { draftOrderGid: params.draftOrderGid },
+        where: {
+          draftOrderGid: params.draftOrderGid,
+          shopId: shopRecord.id,
+        },
         include: { draw: true },
       });
     }
@@ -689,6 +692,7 @@ export async function recordAllocationPurchase(
       allocation = await tx.allocation.findFirst({
         where: {
           drawId,
+          shopId: shopRecord.id,
           ...(entryId ? { entryId } : {}),
         },
         include: { draw: true },

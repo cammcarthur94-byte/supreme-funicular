@@ -1,11 +1,20 @@
+import crypto from "node:crypto";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { runVisibilityGuardScan } from "../services/guardScanner.server";
+
+function isTimingSafeEqual(supplied: string | null, expected: string): boolean {
+  if (!supplied) return false;
+  const suppliedBuf = Buffer.from(supplied);
+  const expectedBuf = Buffer.from(expected);
+  if (suppliedBuf.length !== expectedBuf.length) return false;
+  return crypto.timingSafeEqual(suppliedBuf, expectedBuf);
+}
 
 async function handleCronRequest(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
   const authHeader = request.headers.get("authorization");
 
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+  if (!cronSecret || !isTimingSafeEqual(authHeader, `Bearer ${cronSecret}`)) {
     console.error("[api.cron.guard] Unauthorized backstop cron execution attempt.");
     return new Response("Unauthorized", { status: 401 });
   }

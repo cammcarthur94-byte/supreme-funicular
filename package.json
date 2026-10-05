@@ -26,6 +26,14 @@
   "engines": {
     "node": ">=22.12"
   },
+  "overrides": {
+    "@prisma/config": {
+      "deepmerge-ts": "^8.0.0"
+    },
+    "deepmerge-ts": "^8.0.0",
+    "p-map": "^4.0.0",
+    "qs": "^6.16.0"
+  },
   "dependencies": {
     "@prisma/client": "^6.16.3",
     "@react-router/dev": "7.18.2",
@@ -76,10 +84,6 @@
   "trustedDependencies": [
     "@shopify/plugin-cloudflare"
   ],
-  "overrides": {
-    "p-map": "^4.0.0",
-    "qs": "^6.16.0"
-  },
   "resolutions": {
     "qs": "^6.16.0"
   },

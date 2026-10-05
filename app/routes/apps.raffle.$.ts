@@ -12,6 +12,7 @@ import { verifyTurnstileToken } from "../services/turnstile.server";
 import { issueFormToken, validateFormToken } from "../services/formToken.server";
 import { checkEntryRateLimit } from "../services/rateLimiter.server";
 import { calculateRiskScore } from "../services/riskScore";
+import { logger } from "../services/logger.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const proxy = verifyAppProxyRequest(request);
@@ -518,7 +519,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   // Honeypot Protection (Phase 7): hidden input check. Any value -> silent reject and flag.
   const honeypot = (body.website_hp_check || body.hp_extra || body.honeypot || "") as string;
   if (typeof honeypot === "string" && honeypot.trim().length > 0) {
-    console.warn(`[bot-guard] Honeypot triggered by customer ${proxy.customerId} on draw ${drawId}`);
+    logger.warn(`[bot-guard] Honeypot triggered by customer ${proxy.customerId} on draw ${drawId}`);
     await prisma.auditLog.create({
       data: {
         shopId: shop.id,
@@ -564,11 +565,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     fillTimeMs = tokenValidation.fillTimeMs;
   }
 
-  let email = typeof fallback.email === "string" && fallback.email.includes("@") ? fallback.email : undefined;
-  const verifiedEmail = fallback.verifiedEmail !== false;
-  let countryCode = typeof fallback.countryCode === "string" && fallback.countryCode.trim() !== "" ? fallback.countryCode.trim().toUpperCase() : null;
-  let createdAt = typeof fallback.createdAt === "string" ? fallback.createdAt : new Date(Date.now() - 30 * 86400000).toISOString();
-  let phone = typeof fallback.phone === "string" ? fallback.phone : null;
+  // In test environment, allow mock fallback data. In production/dev, enforce GraphQL customer lookup.
+  const allowFallback = process.env.NODE_ENV === "test";
+  let email = allowFallback && typeof fallback.email === "string" && fallback.email.includes("@") ? fallback.email : undefined;
+  const verifiedEmail = allowFallback ? (fallback.verifiedEmail !== false) : true;
+  let countryCode = allowFallback && typeof fallback.countryCode === "string" && fallback.countryCode.trim() !== "" ? fallback.countryCode.trim().toUpperCase() : null;
+  let createdAt = allowFallback && typeof fallback.createdAt === "string" ? fallback.createdAt : new Date(Date.now() - 30 * 86400000).toISOString();
+  let phone = allowFallback && typeof fallback.phone === "string" ? fallback.phone : null;
 
   // Only attempt Admin GraphQL if email was not supplied by authenticated storefront session
   if (!email && proxy.customerId) {
@@ -607,7 +610,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         phone = phone || customer.phone || null;
       }
     } catch (err) {
-      console.warn("[entry] Admin GraphQL customer query skipped/failed:", err);
+      logger.warn("[entry] Admin GraphQL customer query skipped/failed:", err);
     }
   }
 
@@ -649,7 +652,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         return { status: 409 as const, body: { error: "Entries are closed for this draw." } };
       }
       if (!lockedDraw.encryptionKeyId) {
-        console.error(`[entry] Missing draw encryption key for ${drawId}`);
+        logger.error(`[entry] Missing draw encryption key for ${drawId}`);
         return { status: 500 as const, body: { error: "We couldn't process your entry. Please try again." } };
       }
 
@@ -741,6 +744,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           riskScore: riskResult.score,
           riskFlags: combinedRiskFlags,
           status: riskResult.status,
+          createdAt: now,
         },
       });
 
@@ -764,7 +768,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       return proxyJson({ error: "You've already entered this draw." }, 409);
     }
-    console.error("[entry] Entry submission failed:", error);
+    logger.error("[entry] Entry submission failed:", error);
     return proxyJson({ error: "We couldn't process your entry. Please try again." }, 500);
   }
 };
