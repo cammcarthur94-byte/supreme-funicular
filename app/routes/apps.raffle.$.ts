@@ -390,6 +390,62 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     drawId = latest.id;
   }
 
+  if (!proxy.customerId) return proxyJson({ error: "Log in to your customer account to enter." }, 401);
+
+  const body = (await request.clone().json().catch(() => ({}))) as Record<string, unknown>;
+  const fallback = (body.customerData as Record<string, unknown>) || {};
+
+  let email = typeof fallback.email === "string" && fallback.email.includes("@") ? fallback.email : undefined;
+  const verifiedEmail = fallback.verifiedEmail !== false;
+  let countryCode = typeof fallback.countryCode === "string" && fallback.countryCode.trim() !== "" ? fallback.countryCode.trim().toUpperCase() : null;
+  let createdAt = typeof fallback.createdAt === "string" ? fallback.createdAt : new Date(Date.now() - 30 * 86400000).toISOString();
+  let phone = typeof fallback.phone === "string" ? fallback.phone : null;
+
+  // Only attempt Admin GraphQL if email was not supplied by authenticated storefront session
+  if (!email && proxy.customerId) {
+    try {
+      const { admin } = await unauthenticated.admin(proxy.shop);
+      const response = await admin.graphql(
+        `#graphql
+          query RaffleEntryCustomer($id: ID!) {
+            customer(id: $id) {
+              id
+              email
+              createdAt
+              phone
+              defaultAddress { countryCodeV2 }
+            }
+          }
+        `,
+        { variables: { id: `gid://shopify/Customer/${proxy.customerId}` } }
+      );
+      const payload = (await response.json()) as {
+        data?: {
+          customer?: {
+            id: string;
+            email?: string | null;
+            createdAt: string;
+            phone?: string | null;
+            defaultAddress?: { countryCodeV2: string } | null;
+          } | null;
+        };
+      };
+      const customer = payload.data?.customer;
+      if (customer?.email) {
+        email = customer.email;
+        countryCode = countryCode || customer.defaultAddress?.countryCodeV2 || null;
+        createdAt = customer.createdAt;
+        phone = phone || customer.phone || null;
+      }
+    } catch (err) {
+      console.warn("[entry] Admin GraphQL customer query skipped/failed:", err);
+    }
+  }
+
+  if (!email && proxy.customerId) {
+    email = `customer_${proxy.customerId}@store.customer`;
+  }
+
   try {
     const result = await prisma.$transaction(async (tx) => {
       const [lockedDraw] = await tx.$queryRaw<Array<{
@@ -417,71 +473,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       if (!isEntryWindowOpen(drawStatus, now, lockedDraw.entryOpensAt, lockedDraw.entryClosesAt)) {
         return { status: 409 as const, body: { error: "Entries are closed for this draw." } };
       }
-      if (!proxy.customerId) return { status: 401 as const, body: { error: "Log in to your customer account to enter." } };
       if (!lockedDraw.encryptionKeyId) {
         console.error(`[entry] Missing draw encryption key for ${drawId}`);
         return { status: 500 as const, body: { error: "We couldn't process your entry. Please try again." } };
-      }
-
-      // Customer verification: try Admin GraphQL first, with safe fallback if Protected Customer Data is restricted in dev
-      let email: string | undefined;
-      let verifiedEmail = true;
-      let countryCode: string | null = null;
-      let createdAt = new Date().toISOString();
-      let phone: string | null = null;
-
-      try {
-        const { admin } = await unauthenticated.admin(proxy.shop);
-        const response = await admin.graphql(
-          `#graphql
-            query RaffleEntryCustomer($id: ID!) {
-              customer(id: $id) {
-                id
-                email
-                createdAt
-                phone
-                defaultAddress { countryCodeV2 }
-              }
-            }
-          `,
-          { variables: { id: `gid://shopify/Customer/${proxy.customerId}` } }
-        );
-        const payload = (await response.json()) as {
-          data?: {
-            customer?: {
-              id: string;
-              email?: string | null;
-              createdAt: string;
-              phone?: string | null;
-              defaultAddress?: { countryCodeV2: string } | null;
-            } | null;
-          };
-          errors?: unknown;
-        };
-        const customer = payload.data?.customer;
-        if (!payload.errors && customer && customer.email) {
-          email = customer.email;
-          verifiedEmail = true;
-          countryCode = customer.defaultAddress?.countryCodeV2 ?? null;
-          createdAt = customer.createdAt;
-          phone = customer.phone ?? null;
-        }
-      } catch (err) {
-        console.warn("[entry] Admin GraphQL customer query error:", err);
-      }
-
-      const body = (await request.clone().json().catch(() => ({}))) as Record<string, unknown>;
-      const fallback = (body.customerData as Record<string, unknown>) || {};
-
-      // If GraphQL customer lookup was restricted by Shopify Protected Customer Data in development,
-      // read customer profile passed securely from authenticated Liquid storefront session
-      if (!email) {
-        email = typeof fallback.email === "string" && fallback.email.includes("@")
-          ? fallback.email
-          : `customer_${proxy.customerId}@store.customer`;
-        verifiedEmail = fallback.verifiedEmail !== false;
-        createdAt = typeof fallback.createdAt === "string" ? fallback.createdAt : new Date(Date.now() - 30 * 86400000).toISOString();
-        phone = typeof fallback.phone === "string" ? fallback.phone : null;
       }
 
       const parsedRules = eligibilityRulesSchema.safeParse(lockedDraw.rules);
@@ -516,8 +510,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         };
       }
 
-      const normalizedEmail = evaluation.normalizedEmail || email.trim().toLowerCase();
-      const normalizedEmailHash = evaluation.normalizedEmailHash || hashNormalizedEmail(email);
+      const customerEmail = email || `customer_${proxy.customerId}@store.customer`;
+      const normalizedEmail = evaluation.normalizedEmail || customerEmail.trim().toLowerCase();
+      const normalizedEmailHash = evaluation.normalizedEmailHash || hashNormalizedEmail(customerEmail);
       const rawDrawKey = decrypt(lockedDraw.encryptionKeyId);
 
       const riskFlags: string[] = [];

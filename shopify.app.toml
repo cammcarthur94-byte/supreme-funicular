@@ -5,23 +5,11 @@ name = "Fairdrops"
 application_url = "https://fairdrops.onrender.com"
 embedded = true
 
-[access_scopes]
-# Minimum scopes required for Fairdrops raffle operation:
-# read_products: Read raffle products/variants, prices, images, titles
-# write_products: Unpublish/hide raffle products from storefront sales channels (Phase 4)
-# read_customers: Verify customer eligibility (account age, email verification, address)
-# write_draft_orders: Create secure, MSRP-locked, single-use draft orders for winners (Phase 9)
-# read_orders: Listen to orders/paid & orders/create webhooks to finalize allocations and verify region
-# read_locations: Check merchant inventory locations
-# read_inventory: Check variant stock levels before launching draws
-scopes = "read_products,write_products,read_customers,write_draft_orders,read_orders,read_locations,read_inventory"
+[build]
+automatically_update_urls_on_dev = true
 
 [webhooks]
 api_version = "2025-01"
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/app/uninstalled"
-  topics = [ "app/uninstalled" ]
 
   [[webhooks.subscriptions]]
   uri = "/webhooks/app/scopes_update"
@@ -31,14 +19,18 @@ api_version = "2025-01"
   uri = "/webhooks/products/update"
   topics = [ "products/update" ]
 
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_customers,read_inventory,read_locations,read_orders,read_products,write_draft_orders,write_products"
+
+[auth]
+redirect_urls = [ "https://fairdrops.onrender.com/auth/callback" ]
 
 [app_proxy]
 url = "https://plans-enjoy-half-yeast.trycloudflare.com/apps/raffle"
 subpath = "raffle"
 prefix = "apps"
-
-[auth]
-redirect_urls = [ "https://fairdrops.onrender.com/auth/callback" ]
-
-[build]
-automatically_update_urls_on_dev = true
