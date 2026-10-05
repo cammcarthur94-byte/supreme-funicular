@@ -174,10 +174,15 @@
           });
 
           let payload = {};
+          let responseText = "";
           try {
-            payload = await entryResponse.json();
+            responseText = await entryResponse.text();
+            payload = JSON.parse(responseText);
           } catch {
-            payload = { error: "Unexpected response from server. Please try again." };
+            const preview = responseText.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+            payload = {
+              error: `Server error (${entryResponse.status}): ${preview || entryResponse.statusText || "Empty response"}`
+            };
           }
 
           if (!entryResponse.ok) {
