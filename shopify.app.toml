@@ -12,10 +12,6 @@ automatically_update_urls_on_dev = true
 api_version = "2025-01"
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/app/scopes_update"
-  topics = [ "app/scopes_update" ]
-
-  [[webhooks.subscriptions]]
   uri = "/webhooks/products/update"
   topics = [ "products/update" ]
 
@@ -24,20 +20,11 @@ api_version = "2025-01"
   topics = [ "app/uninstalled" ]
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/orders/create"
-  topics = [ "orders/create" ]
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/orders/paid"
-  topics = [ "orders/paid" ]
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/draft_orders/update"
-  topics = [ "draft_orders/update" ]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-# Least-privilege set: removed unused read_inventory and read_locations
 scopes = "read_customers,read_orders,read_products,write_draft_orders,write_products"
 
 [auth]

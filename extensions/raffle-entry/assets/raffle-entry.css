@@ -123,10 +123,63 @@
   text-align: center;
 }
 
-.fairdrops-message {
-  margin: 0 0 12px 0;
+.fairdrops-customer-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #f1f2f4;
+  border: 1px solid #e1e3e5;
+  color: #44474a;
+  font-size: 13px;
+  padding: 8px 16px;
+  border-radius: 20px;
+  margin-bottom: 16px;
+  width: auto;
+}
+
+.fairdrops-customer-icon {
   font-size: 14px;
-  font-weight: 500;
+}
+
+.fairdrops-message {
+  margin: 0 0 16px 0;
+  padding: 14px 18px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: left;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.fairdrops-message-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
+
+.fairdrops-message-success {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+}
+
+.fairdrops-message-info {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+}
+
+.fairdrops-login-prompt {
+  text-align: center;
+}
+
+.fairdrops-login-desc {
+  font-size: 14px;
+  color: #6d7175;
+  margin: 0 0 12px 0;
 }
 
 .fairdrops-login-btn {
@@ -149,7 +202,10 @@
 }
 
 .fairdrops-submit-btn {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   width: 100%;
   box-sizing: border-box;
   background: #008060;
@@ -160,14 +216,30 @@
   font-weight: 600;
   border-radius: 8px;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, opacity 0.15s ease;
 }
 
-.fairdrops-submit-btn:hover {
+.fairdrops-submit-btn:hover:not(:disabled) {
   background: #006e52;
 }
 
 .fairdrops-submit-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.65;
   cursor: not-allowed;
+}
+
+.fairdrops-btn-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: fairdrops-spin 0.8s linear infinite;
+}
+
+@keyframes fairdrops-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

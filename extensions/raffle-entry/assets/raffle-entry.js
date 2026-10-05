@@ -212,13 +212,34 @@
       // Default HTML content remains cleanly visible
     }
 
+    const btnSpinner = root.querySelector("[data-btn-spinner]");
+    const btnText = root.querySelector("[data-btn-text]");
+
+    const showMessage = (type, text) => {
+      if (!messageEl) return;
+      messageEl.className = `fairdrops-message fairdrops-message-${type}`;
+      messageEl.textContent = text;
+      messageEl.style.display = "flex";
+    };
+
+    const clearMessage = () => {
+      if (!messageEl) return;
+      messageEl.style.display = "none";
+      messageEl.textContent = "";
+    };
+
+    const setButtonLoading = (loading) => {
+      if (!button) return;
+      button.disabled = loading;
+      if (btnSpinner) btnSpinner.style.display = loading ? "inline-block" : "none";
+      if (btnText) btnText.textContent = loading ? "Submitting Entry..." : "Enter This Draw";
+    };
+
     if (button) {
       button.addEventListener("click", async () => {
-        button.disabled = true;
-        if (messageEl) {
-          messageEl.style.color = "#202223";
-          messageEl.textContent = "Verifying security & submitting entry…";
-        }
+        setButtonLoading(true);
+        showMessage("info", "Verifying security & submitting your entry…");
+
         try {
           const targetId = currentDraw?.id || specifiedDrawId;
           const customerMeta = root.querySelector("[data-customer-meta]");
@@ -274,36 +295,38 @@
             responseText = await entryResponse.text();
             payload = JSON.parse(responseText);
           } catch {
-            const preview = responseText.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+            console.error("Non-JSON entry response:", entryResponse.status, responseText);
             payload = {
-              error: `Server error (${entryResponse.status}): ${preview || entryResponse.statusText || "Empty response"}`
+              error: "Unable to submit your entry right now. The server is temporarily reconnecting. Please refresh and try again."
             };
           }
 
           if (!entryResponse.ok) {
-            if (messageEl) {
-              messageEl.style.color = "#d72c0d";
-              messageEl.textContent = payload.userMessage || payload.error || "We couldn't submit your entry. Please check requirements.";
+            let userMsg = payload.userMessage || payload.error;
+            if (entryResponse.status === 409 && (!userMsg || userMsg.includes("closed"))) {
+              userMsg = "Entries for this draw are currently closed.";
+            } else if (entryResponse.status === 409) {
+              userMsg = "You've already entered this draw! We'll notify you if you are selected.";
+            } else if (entryResponse.status === 429) {
+              userMsg = "Too many entry attempts in a short period. Please slow down and try again in a few moments.";
+            } else if (!userMsg) {
+              userMsg = "We couldn't submit your entry. Please check eligibility requirements and try again.";
             }
+            showMessage("error", userMsg);
+
             if (window.turnstile && turnstileWidgetId !== null) {
               window.turnstile.reset(turnstileWidgetId);
               turnstileToken = null;
             }
-            button.disabled = false;
+            setButtonLoading(false);
           } else {
-            if (messageEl) {
-              messageEl.style.color = "#008060";
-              messageEl.textContent = "🎉 You're entered! Check your email when the draw completes.";
-            }
+            showMessage("success", "🎉 You're entered! Check your email when the draw completes.");
             button.style.display = "none";
           }
         } catch (err) {
           console.error("Fairdrops entry error:", err);
-          if (messageEl) {
-            messageEl.style.color = "#d72c0d";
-            messageEl.textContent = "Error submitting your entry. Please try again.";
-          }
-          button.disabled = false;
+          showMessage("error", "Network error submitting your entry. Please check your connection and try again.");
+          setButtonLoading(false);
         }
       });
     }

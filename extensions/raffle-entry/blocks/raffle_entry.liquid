@@ -46,8 +46,13 @@
       <!-- Cloudflare Turnstile Container -->
       <div class="fairdrops-turnstile-container" data-turnstile-container style="margin: 12px 0;"></div>
 
-      <p data-customer-message class="fairdrops-message"></p>
+      <div data-customer-message class="fairdrops-message" style="display: none;"></div>
+
       {% if customer %}
+        <div class="fairdrops-customer-badge">
+          <span class="fairdrops-customer-icon">👤</span>
+          <span>Logged in as <strong>{{ customer.email | escape }}</strong></span>
+        </div>
         <div
           data-customer-meta
           data-email="{{ customer.email | escape }}"
@@ -58,12 +63,16 @@
           hidden
         ></div>
         <button type="button" data-entry-button class="fairdrops-submit-btn">
-          Enter This Draw
+          <span class="fairdrops-btn-spinner" data-btn-spinner style="display: none;"></span>
+          <span data-btn-text>Enter This Draw</span>
         </button>
       {% else %}
-        <a data-login-link class="fairdrops-login-btn" href="{{ routes.account_login_url }}?return_url={{ request.path | url_encode }}">
-          Log in / Create account to enter
-        </a>
+        <div class="fairdrops-login-prompt">
+          <p class="fairdrops-login-desc">Sign in with your customer account to submit your verified raffle entry.</p>
+          <a data-login-link class="fairdrops-login-btn" href="{{ routes.account_login_url }}?return_url={{ request.path | url_encode }}">
+            Log in / Create account to enter
+          </a>
+        </div>
       {% endif %}
     </div>
   </div>
