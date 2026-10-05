@@ -549,6 +549,26 @@ export async function checkAndCompleteDrawIfFinished(
       data: { status: "COMPLETED" },
     });
 
+    const drawRecord = await tx.draw.findUniqueOrThrow({
+      where: { id: drawId },
+      select: { purgeAfterDays: true },
+    });
+    const purgeDelaySeconds = (drawRecord.purgeAfterDays || 14) * 24 * 60 * 60;
+    const purgeScheduledAt = new Date(Date.now() + purgeDelaySeconds * 1000);
+
+    const qstashClient = getQStashClient();
+    const baseUrl = process.env.SHOPIFY_APP_URL;
+    if (qstashClient && baseUrl) {
+      await qstashClient
+        .publishJSON({
+          url: `${baseUrl.replace(/\/$/, "")}/api/qstash/draw-purge`,
+          delay: purgeDelaySeconds,
+          deduplicationId: `draw:purge:${drawId}`,
+          body: { drawId, shopId },
+        })
+        .catch((err) => console.error("[QStash] Failed to schedule purge:", err));
+    }
+
     await tx.auditLog.create({
       data: {
         shopId,
@@ -559,7 +579,8 @@ export async function checkAndCompleteDrawIfFinished(
           purchasedCount,
           unsoldUnits,
           unitsAvailable,
-          message: `Draw completed. ${purchasedCount} purchased, ${unsoldUnits} unsold.`,
+          purgeScheduledAt: purgeScheduledAt.toISOString(),
+          message: `Draw completed. ${purchasedCount} purchased, ${unsoldUnits} unsold. Purge scheduled for ${purgeScheduledAt.toISOString()}.`,
         },
       },
     });
@@ -573,6 +594,7 @@ export async function checkAndCompleteDrawIfFinished(
 export interface RecordPurchaseParams {
   shopDomain: string;
   orderId: string;
+  draftOrderGid?: string;
   tags?: string;
   note?: string;
   webhookEventId?: string;
@@ -597,11 +619,12 @@ export interface RecordPurchaseResult {
 }
 
 /**
- * Handles order payment webhook (orders/paid or orders/create paid):
+ * Handles order payment webhook (orders/paid, draft_orders/update, or orders/create paid):
  * 1. Checks webhook idempotency via WebhookEvent.
- * 2. Parses drawId and entryId from order tags/note.
+ * 2. Parses drawId, entryId, or draftOrderGid.
  * 3. In a transaction, updates allocation status to PURCHASED and writes AuditLog.
  * 4. Deducts from remaining units and transitions Draw to COMPLETED if all units claimed/exhausted.
+ * 5. Schedules purge delayed message for purgeAfterDays (Phase 11).
  */
 export async function recordAllocationPurchase(
   params: RecordPurchaseParams
@@ -642,22 +665,35 @@ export async function recordAllocationPurchase(
   const drawMatch = tags.match(/raffle:([a-f\d-]{36})/i) || note.match(/raffle.*?([a-f\d-]{36})/i);
   const entryMatch = tags.match(/entry:([a-f\d-]{36})/i);
 
-  if (!drawMatch) {
+  if (!drawMatch && !params.draftOrderGid) {
     return { success: true, status: "not_raffle_order" };
   }
 
-  const drawId = drawMatch[1];
+  const drawId = drawMatch ? drawMatch[1] : undefined;
   const entryId = entryMatch ? entryMatch[1] : undefined;
   const now = params.now ?? new Date();
 
   return prisma.$transaction(async (tx) => {
-    const allocation = await tx.allocation.findFirst({
-      where: {
-        drawId,
-        ...(entryId ? { entryId } : {}),
-      },
-      include: { draw: true },
-    });
+    let allocation:
+      | (Prisma.AllocationGetPayload<{ include: { draw: true } }>)
+      | null = null;
+
+    if (params.draftOrderGid) {
+      allocation = await tx.allocation.findFirst({
+        where: { draftOrderGid: params.draftOrderGid },
+        include: { draw: true },
+      });
+    }
+
+    if (!allocation && drawId) {
+      allocation = await tx.allocation.findFirst({
+        where: {
+          drawId,
+          ...(entryId ? { entryId } : {}),
+        },
+        include: { draw: true },
+      });
+    }
 
     if (!allocation) {
       return { success: false, status: "allocation_not_found" };
