@@ -22,6 +22,7 @@ import prisma, { forShop } from "../db.server";
 import { validateDrawInput } from "../validation/drawValidation";
 import { unpublishProductFromAllChannels } from "../services/productVisibility.server";
 import { scheduleVisibilityGuardCheck } from "../services/qstash.server";
+import { scheduleDrawLifecycle } from "../services/drawLifecycle.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -154,7 +155,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
   }
 
-  // Schedule self-scheduling QStash guard check
+  // Schedule time-based draw state transitions; entry requests independently enforce both timestamps.
+  await scheduleDrawLifecycle({
+    drawId: existingDraw.id,
+    entryOpensAt: new Date(entryOpensAt),
+    entryClosesAt: new Date(entryClosesAt),
+  });
+
+  // Schedule self-scheduling visibility guard check
   await scheduleVisibilityGuardCheck({ delaySeconds: 1200 });
 
   return redirect(`/app/draws/${existingDraw.id}`);

@@ -1,0 +1,19 @@
+.fairdrops-entry {
+  border: 1px solid rgba(0, 0, 0, .15);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-block: 1rem;
+}
+.fairdrops-entry h2 { margin-top: 0; }
+.fairdrops-entry [data-entry-button] {
+  appearance: none;
+  border: 0;
+  border-radius: 4px;
+  padding: .8rem 1.25rem;
+  background: #171717;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.fairdrops-entry [data-entry-button]:disabled { opacity: .55; cursor: not-allowed; }
+.fairdrops-entry [data-customer-message], .fairdrops-entry [data-entry-status] { min-height: 1.5em; }

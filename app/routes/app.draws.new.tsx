@@ -25,6 +25,7 @@ import { validateDrawInput } from "../validation/drawValidation";
 import { generateDrawKey } from "../services/encryption";
 import { unpublishProductFromAllChannels } from "../services/productVisibility.server";
 import { scheduleVisibilityGuardCheck } from "../services/qstash.server";
+import { scheduleDrawLifecycle } from "../services/drawLifecycle.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
@@ -122,6 +123,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       console.error(`Failed to unpublish product ${productGid}:`, err);
     }
   }
+
+  // Schedule time-based draw state transitions; entry requests independently enforce both timestamps.
+  await scheduleDrawLifecycle({
+    drawId: draw.id,
+    entryOpensAt: draw.entryOpensAt,
+    entryClosesAt: draw.entryClosesAt,
+  });
 
   // Schedule self-scheduling QStash guard check
   await scheduleVisibilityGuardCheck({ delaySeconds: 1200 });
