@@ -1,19 +1,136 @@
 .fairdrops-entry {
-  border: 1px solid rgba(0, 0, 0, .15);
+  max-width: 680px;
+  margin: 32px auto;
+  padding: 0 16px;
+  box-sizing: border-box;
+}
+
+.fairdrops-card {
+  background: #ffffff;
+  border: 1px solid #dcdfe3;
+  border-radius: 12px;
+  padding: 28px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #202223;
+}
+
+.fairdrops-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.fairdrops-badge {
+  display: inline-block;
+  background: #e4f0d5;
+  color: #23541a;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  text-transform: uppercase;
+}
+
+.fairdrops-countdown {
+  font-size: 14px;
+  font-weight: 600;
+  color: #5c5f62;
+}
+
+.fairdrops-title {
+  font-size: 26px;
+  font-weight: 700;
+  color: #202223;
+  margin: 0 0 16px 0;
+  line-height: 1.25;
+}
+
+.fairdrops-requirements-box {
+  background: #f6f6f7;
   border-radius: 8px;
-  padding: 1.5rem;
-  margin-block: 1rem;
+  padding: 16px 20px;
+  margin-bottom: 24px;
 }
-.fairdrops-entry h2 { margin-top: 0; }
-.fairdrops-entry [data-entry-button] {
-  appearance: none;
-  border: 0;
-  border-radius: 4px;
-  padding: .8rem 1.25rem;
-  background: #171717;
-  color: #fff;
-  font: inherit;
+
+.fairdrops-requirements-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: #202223;
+  margin: 0 0 8px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.fairdrops-rules-list {
+  margin: 0;
+  padding-left: 20px;
+  color: #44474a;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.fairdrops-rules-link {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 13px;
+  color: #008060;
+  text-decoration: underline;
+}
+
+.fairdrops-action-box {
+  border-top: 1px solid #e1e3e5;
+  padding-top: 20px;
+  text-align: center;
+}
+
+.fairdrops-message {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.fairdrops-login-btn {
+  display: inline-block;
+  width: 100%;
+  box-sizing: border-box;
+  background: #202223;
+  color: #ffffff !important;
+  text-decoration: none;
+  padding: 14px 24px;
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: 8px;
+  text-align: center;
+  transition: background 0.15s ease;
+}
+
+.fairdrops-login-btn:hover {
+  background: #33373b;
+}
+
+.fairdrops-submit-btn {
+  display: inline-block;
+  width: 100%;
+  box-sizing: border-box;
+  background: #008060;
+  color: #ffffff;
+  border: none;
+  padding: 14px 24px;
+  font-size: 16px;
+  font-weight: 600;
+  border-radius: 8px;
   cursor: pointer;
+  transition: background 0.15s ease;
 }
-.fairdrops-entry [data-entry-button]:disabled { opacity: .55; cursor: not-allowed; }
-.fairdrops-entry [data-customer-message], .fairdrops-entry [data-entry-status] { min-height: 1.5em; }
+
+.fairdrops-submit-btn:hover {
+  background: #006e52;
+}
+
+.fairdrops-submit-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

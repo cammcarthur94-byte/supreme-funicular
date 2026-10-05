@@ -1,30 +1,52 @@
-{% assign raffle_id = block.settings.draw_id | strip %}
+{% assign raffle_id = block.settings.draw_id | default: section.settings.draw_id %}
 {% if raffle_id == blank %}
   {% assign raffle_id = "latest" %}
 {% endif %}
+{% assign rules_url = block.settings.rules_url | default: section.settings.rules_url %}
+
 <div
   class="fairdrops-entry"
   data-fairdrops-entry
   data-draw-id="{{ raffle_id | escape }}"
-  data-rules-url="{{ block.settings.rules_url | escape }}"
+  data-rules-url="{{ rules_url | escape }}"
   {{ block.shopify_attributes }}
 >
-  <p data-entry-status role="status" aria-live="polite">Loading draw…</p>
-  <div data-entry-content hidden>
-      <h2 data-draw-title></h2>
-      <p data-countdown></p>
-      <div data-requirements></div>
-      <a data-official-rules target="_blank" rel="noopener noreferrer" hidden>Official rules</a>
-      <p data-customer-message></p>
-      <a data-login-link href="{{ routes.account_login_url }}?return_url={{ request.path | url_encode }}" hidden>Log in / create account to enter</a>
-      <button type="button" data-entry-button disabled>Enter this draw</button>
+  <div class="fairdrops-card">
+    <div class="fairdrops-header">
+      <span class="fairdrops-badge" data-draw-status>RAFFLE DROP</span>
+      <span class="fairdrops-countdown" data-countdown>Entries open soon</span>
     </div>
+
+    <h2 class="fairdrops-title" data-draw-title>The Complete Snowboard Raffle Drop</h2>
+
+    <div class="fairdrops-requirements-box">
+      <h4 class="fairdrops-requirements-heading">Eligibility Requirements</h4>
+      <div data-requirements>
+        <ul class="fairdrops-rules-list">
+          <li>Verified customer email required</li>
+          <li>Eligible shipping countries: Canada, United States</li>
+        </ul>
+      </div>
+      <a data-official-rules class="fairdrops-rules-link" target="_blank" rel="noopener noreferrer" hidden>Official rules</a>
+    </div>
+
+    <div class="fairdrops-action-box">
+      <p data-customer-message class="fairdrops-message"></p>
+      {% if customer %}
+        <button type="button" data-entry-button class="fairdrops-submit-btn">
+          Enter This Draw
+        </button>
+      {% else %}
+        <a data-login-link class="fairdrops-login-btn" href="{{ routes.account_login_url }}?return_url={{ request.path | url_encode }}">
+          Log in / Create account to enter
+        </a>
+      {% endif %}
+    </div>
+  </div>
 </div>
 
-{% if raffle_id != blank %}
-  <script src="{{ 'raffle-entry.js' | asset_url }}" defer></script>
-  <link rel="stylesheet" href="{{ 'raffle-entry.css' | asset_url }}">
-{% endif %}
+<script src="{{ 'raffle-entry.js' | asset_url }}" defer></script>
+<link rel="stylesheet" href="{{ 'raffle-entry.css' | asset_url }}">
 
 {% schema %}
 {
@@ -32,7 +54,7 @@
   "target": "section",
   "stylesheet": "raffle-entry.css",
   "settings": [
-    { "type": "text", "id": "draw_id", "label": "Draw ID", "info": "Copy the draw ID from Fairdrops in your app admin." },
+    { "type": "text", "id": "draw_id", "label": "Draw ID", "info": "Leave blank to automatically display your store's latest active raffle drop." },
     { "type": "url", "id": "rules_url", "label": "Official rules link" }
   ]
 }
