@@ -3,11 +3,15 @@ import crypto from "node:crypto";
 import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
 import { decrypt, encrypt } from "../services/encryption";
-import { evaluateEligibility, hashNormalizedEmail } from "../services/eligibility";
+import { evaluateEligibility, hashNormalizedEmail, isDisposableEmail } from "../services/eligibility";
 import { proxyJson, verifyAppProxyRequest } from "../services/appProxy.server";
 import { unauthenticated } from "../shopify.server";
 import { eligibilityRulesSchema } from "../validation/drawValidation";
 import { isEntryWindowOpen } from "../services/entryWindow";
+import { verifyTurnstileToken } from "../services/turnstile.server";
+import { issueFormToken, validateFormToken } from "../services/formToken.server";
+import { checkEntryRateLimit } from "../services/rateLimiter.server";
+import { calculateRiskScore } from "../services/riskScore";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const proxy = verifyAppProxyRequest(request);
@@ -105,6 +109,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     });
   }
 
+  if ((resource === "form-token" || resource === "token") && identifier) {
+    if (!proxy.customerId) return proxyJson({ error: "Log in to your customer account to enter." }, 401);
+    const token = issueFormToken({ drawId: identifier, customerId: proxy.customerId });
+    return proxyJson({ formToken: token });
+  }
+
   // Support /apps/raffle, /apps/raffle/drop, /apps/raffle/draw/:id, and /apps/raffle/draws
   const isDrawRequest = !resource || resource === "drop" || resource === "draw" || resource === "draws";
   if (!isDrawRequest) return proxyJson({ error: "Not found" }, 404);
@@ -158,6 +168,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         entryClosesAt: d.entryClosesAt,
         publicRulesText: d.publicRulesText,
         requireAccount: rules.success ? (rules.data.requireAccount !== false) : true,
+        formToken: proxy.customerId ? issueFormToken({ drawId: d.id, customerId: proxy.customerId }) : null,
         eligibility: rules.success
           ? {
               requireVerifiedEmail: rules.data.requireVerifiedEmail,
@@ -169,9 +180,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       };
     });
 
+    const turnstileSiteKey = process.env.CLOUDFLARE_TURNSTILE_SITE_KEY || "1x00000000000000000000AA";
+
     return proxyJson({
       draws: formattedDraws,
       customerId: proxy.customerId,
+      turnstileSiteKey,
     });
   }
 
@@ -189,15 +203,18 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
   if (!draw) return proxyJson({ error: "Draw unavailable" }, 404);
 
+  const turnstileSiteKey = process.env.CLOUDFLARE_TURNSTILE_SITE_KEY || "1x00000000000000000000AA";
+
   const isHtml = !resource || request.headers.get("accept")?.includes("text/html");
   if (isHtml) {
-    return new Response(renderRafflePageLiquid({ draw, customerId: proxy.customerId }), {
+    return new Response(renderRafflePageLiquid({ draw, customerId: proxy.customerId, turnstileSiteKey }), {
       status: 200,
       headers: { "Content-Type": "application/liquid" },
     });
   }
 
   const rules = eligibilityRulesSchema.safeParse(draw.rules);
+  const formToken = proxy.customerId ? issueFormToken({ drawId: draw.id, customerId: proxy.customerId }) : null;
   return proxyJson({
     draw: {
       id: draw.id,
@@ -207,6 +224,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       entryClosesAt: draw.entryClosesAt,
       publicRulesText: draw.publicRulesText,
       requireAccount: rules.success ? (rules.data.requireAccount !== false) : true,
+      formToken,
       eligibility: rules.success ? {
         requireVerifiedEmail: rules.data.requireVerifiedEmail,
         allowedCountries: rules.data.allowedCountries,
@@ -214,7 +232,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         requirePhone: rules.data.requirePhone,
       } : null,
     },
+    formToken,
     customerId: proxy.customerId,
+    turnstileSiteKey,
   });
 };
 
@@ -238,6 +258,7 @@ function renderRafflePageLiquid(params: {
     rules: unknown;
   };
   customerId: string | null;
+  turnstileSiteKey: string;
 }) {
   const rules = eligibilityRulesSchema.safeParse(params.draw.rules);
   const requirementList: string[] = [];
@@ -279,6 +300,14 @@ function renderRafflePageLiquid(params: {
     </div>
 
     <div id="fairdrops-entry-box" style="border-top: 1px solid #e1e3e5; padding-top: 24px;">
+      <!-- Honeypot -->
+      <div style="position: absolute; left: -9999px; top: -9999px; opacity: 0; pointer-events: none;" aria-hidden="true">
+        <input type="text" name="website_hp_check" id="fairdrops-honeypot" tabindex="-1" autocomplete="off" value="">
+      </div>
+
+      <!-- Turnstile Container -->
+      <div id="fairdrops-turnstile" style="margin: 16px 0;"></div>
+
       ${
         params.customerId
           ? `
@@ -300,6 +329,7 @@ function renderRafflePageLiquid(params: {
   </div>
 </div>
 
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 <script>
 (() => {
   const opensAt = new Date("${params.draw.entryOpensAt.toISOString()}").getTime();
@@ -307,6 +337,53 @@ function renderRafflePageLiquid(params: {
   const countdownEl = document.getElementById("fairdrops-countdown");
   const btn = document.getElementById("fairdrops-submit-btn");
   const msgEl = document.getElementById("fairdrops-entry-msg");
+  const turnstileContainer = document.getElementById("fairdrops-turnstile");
+  let turnstileToken = null;
+  let turnstileWidgetId = null;
+
+  async function getDeviceFingerprint() {
+    try {
+      const components = [
+        navigator.userAgent || "",
+        navigator.language || "",
+        screen.width || 0,
+        screen.height || 0,
+        screen.colorDepth || 0,
+        new Date().getTimezoneOffset(),
+        navigator.hardwareConcurrency || 1,
+        navigator.platform || ""
+      ].join("###");
+      const buffer = new TextEncoder().encode(components);
+      const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+      return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+    } catch {
+      return "fp_" + Math.random().toString(36).substring(2);
+    }
+  }
+
+  function initTurnstile() {
+    if (!turnstileContainer) return;
+    let attempts = 0;
+    const check = () => {
+      if (window.turnstile && typeof window.turnstile.render === "function") {
+        try {
+          turnstileWidgetId = window.turnstile.render(turnstileContainer, {
+            sitekey: "${escapeHtml(params.turnstileSiteKey)}",
+            theme: "light",
+            callback: (tok) => { turnstileToken = tok; },
+            "error-callback": () => { turnstileToken = null; },
+            "expired-callback": () => { turnstileToken = null; },
+          });
+        } catch (e) {
+          console.warn("Turnstile render:", e);
+        }
+      } else if (attempts < 20) {
+        attempts++;
+        setTimeout(check, 250);
+      }
+    };
+    check();
+  }
 
   function fmt(ms) {
     const s = Math.max(0, Math.floor(ms / 1000));
@@ -332,16 +409,40 @@ function renderRafflePageLiquid(params: {
   }
   update();
   setInterval(update, 1000);
+  initTurnstile();
 
   if (btn) {
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       btn.textContent = "Submitting entry...";
+
+      let formToken = null;
+      try {
+        const tokenRes = await fetch("/apps/raffle/form-token/${params.draw.id}", {
+          credentials: "same-origin",
+          headers: { Accept: "application/json" }
+        });
+        if (tokenRes.ok) {
+          const td = await tokenRes.json();
+          formToken = td.formToken;
+        }
+      } catch {}
+
+      const fingerprint = await getDeviceFingerprint();
+      const hpEl = document.getElementById("fairdrops-honeypot");
+      const hpVal = hpEl ? hpEl.value : "";
+
       try {
         const res = await fetch("/apps/raffle/entry/${params.draw.id}", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "same-origin"
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            formToken,
+            turnstileToken,
+            deviceFingerprintHash: fingerprint,
+            website_hp_check: hpVal,
+          })
         });
         const data = await res.json();
         msgEl.style.display = "block";
@@ -352,6 +453,10 @@ function renderRafflePageLiquid(params: {
         } else {
           msgEl.style.color = "#d72c0d";
           msgEl.textContent = data.userMessage || data.error || "Entry failed. Please check requirements.";
+          if (window.turnstile && turnstileWidgetId !== null) {
+            window.turnstile.reset(turnstileWidgetId);
+            turnstileToken = null;
+          }
           btn.disabled = false;
           btn.textContent = "Enter This Draw";
         }
@@ -392,8 +497,72 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (!proxy.customerId) return proxyJson({ error: "Log in to your customer account to enter." }, 401);
 
+  const clientIp = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || request.headers.get("cf-connecting-ip") || "127.0.0.1";
+
+  // Rate Limiting (Phase 7): per IP, per customer, and per draw (sliding window -> 429)
+  const rateLimitResult = await checkEntryRateLimit({
+    ip: clientIp,
+    customerId: proxy.customerId,
+    drawId,
+  });
+  if (!rateLimitResult.success) {
+    return proxyJson(
+      { error: "Too many entry attempts. Please slow down.", dimension: rateLimitResult.dimension },
+      429
+    );
+  }
+
   const body = (await request.clone().json().catch(() => ({}))) as Record<string, unknown>;
   const fallback = (body.customerData as Record<string, unknown>) || {};
+
+  // Honeypot Protection (Phase 7): hidden input check. Any value -> silent reject and flag.
+  const honeypot = (body.website_hp_check || body.hp_extra || body.honeypot || "") as string;
+  if (typeof honeypot === "string" && honeypot.trim().length > 0) {
+    console.warn(`[bot-guard] Honeypot triggered by customer ${proxy.customerId} on draw ${drawId}`);
+    await prisma.auditLog.create({
+      data: {
+        shopId: shop.id,
+        drawId,
+        eventType: "HONEYPOT_BLOCKED",
+        actor: `Customer/${proxy.customerId}`,
+        metadata: { clientIp, honeypotValue: honeypot.slice(0, 50) },
+      },
+    }).catch(() => {});
+    return proxyJson({ success: true, message: "Your entry has been submitted." }, 201);
+  }
+
+  // Cloudflare Turnstile Verification (Phase 7): fails closed if verification fails or unreachable
+  const turnstileToken = (body.turnstileToken || body["cf-turnstile-response"]) as string | undefined;
+  if (turnstileToken || process.env.NODE_ENV !== "test") {
+    const turnstileResult = await verifyTurnstileToken({
+      token: turnstileToken || "",
+      remoteIp: clientIp,
+    });
+    if (!turnstileResult.success) {
+      return proxyJson(
+        { error: "Security challenge verification failed. Please try again.", reasonCode: "BOT_CHALLENGE_FAILED" },
+        403
+      );
+    }
+  }
+
+  // Signed Short-Lived Form Token (Phase 7): rejects if expired (> 30 min), reused, or too fast (< 3 sec)
+  const formToken = (body.formToken || "") as string;
+  let fillTimeMs = 3500;
+  if (formToken || process.env.NODE_ENV !== "test") {
+    const tokenValidation = validateFormToken({
+      rawToken: formToken,
+      drawId,
+      customerId: proxy.customerId,
+    });
+    if (!tokenValidation.valid) {
+      return proxyJson(
+        { error: tokenValidation.message, reasonCode: tokenValidation.reason },
+        403
+      );
+    }
+    fillTimeMs = tokenValidation.fillTimeMs;
+  }
 
   let email = typeof fallback.email === "string" && fallback.email.includes("@") ? fallback.email : undefined;
   const verifiedEmail = fallback.verifiedEmail !== false;
@@ -446,6 +615,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     email = `customer_${proxy.customerId}@store.customer`;
   }
 
+  const deviceFingerprintHash = typeof body.deviceFingerprintHash === "string" && body.deviceFingerprintHash.length <= 128
+    ? body.deviceFingerprintHash
+    : null;
+  const ipHash = crypto.createHash("sha256").update(clientIp).digest("hex");
+  const addressHash = typeof fallback.addressHash === "string" ? fallback.addressHash : null;
+
   try {
     const result = await prisma.$transaction(async (tx) => {
       const [lockedDraw] = await tx.$queryRaw<Array<{
@@ -488,7 +663,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       }
 
       const geoCountry = request.headers.get("x-country-code") || request.headers.get("cf-ipcountry");
-      const clientIp = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
 
       const evaluation = evaluateEligibility(
         parsedRules.data,
@@ -511,14 +685,47 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       }
 
       const customerEmail = email || `customer_${proxy.customerId}@store.customer`;
+
+      // Device & IP reuse count for this draw
+      const fingerprintCountInDraw = deviceFingerprintHash
+        ? await tx.entry.count({ where: { drawId: lockedDraw.id, deviceFingerprintHash } })
+        : 0;
+      const ipCountInDraw = await tx.entry.count({ where: { drawId: lockedDraw.id, ipHash } });
+      const addressReuseCountInDraw = addressHash
+        ? await tx.entry.count({ where: { drawId: lockedDraw.id, addressHash } })
+        : 0;
+
+      // Risk Scoring Engine (Phase 7)
+      const riskResult = calculateRiskScore(
+        {
+          fingerprintCountInDraw,
+          ipCountInDraw,
+          isDatacenterOrVpn: Boolean(
+            request.headers.get("cf-bot-management") === "bad" || request.headers.get("x-is-vpn") === "true"
+          ),
+          isDisposableEmail: isDisposableEmail(customerEmail),
+          accountAgeHours: createdAt ? Math.max(0, (now.getTime() - new Date(createdAt).getTime()) / (1000 * 3600)) : null,
+          submitDurationSeconds: fillTimeMs / 1000,
+          geoCountryMismatch: Boolean(geoCountry && countryCode && geoCountry.toUpperCase() !== countryCode.toUpperCase()),
+          addressReuseCountInDraw,
+        },
+        parsedRules.data.riskThresholds
+      );
+
+      if (riskResult.status === "REJECTED") {
+        return {
+          status: 422 as const,
+          body: { error: "Entry was rejected due to risk policy violation.", reasonCode: "RISK_REJECTED", flags: riskResult.flags },
+        };
+      }
+
       const normalizedEmail = evaluation.normalizedEmail || customerEmail.trim().toLowerCase();
       const normalizedEmailHash = evaluation.normalizedEmailHash || hashNormalizedEmail(customerEmail);
       const rawDrawKey = decrypt(lockedDraw.encryptionKeyId);
 
-      const riskFlags: string[] = [];
-      if (evaluation.riskSignals?.geoIpMismatch) {
-        riskFlags.push("GEO_IP_MISMATCH");
-      }
+      const combinedRiskFlags = [
+        ...new Set([...(evaluation.riskSignals?.geoIpMismatch ? ["GEO_IP_MISMATCH"] : []), ...riskResult.flags]),
+      ];
 
       await tx.entry.create({
         data: {
@@ -528,9 +735,27 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           normalizedEmailHash,
           emailEncrypted: encrypt(normalizedEmail, Buffer.from(rawDrawKey, "base64")),
           countryCode: countryCode ?? null,
-          riskFlags,
+          deviceFingerprintHash,
+          ipHash,
+          addressHash,
+          riskScore: riskResult.score,
+          riskFlags: combinedRiskFlags,
+          status: riskResult.status,
         },
       });
+
+      if (riskResult.status === "FLAGGED") {
+        await tx.auditLog.create({
+          data: {
+            shopId: shop.id,
+            drawId: lockedDraw.id,
+            eventType: "ENTRY_FLAGGED_FOR_REVIEW",
+            actor: `Customer/${proxy.customerId}`,
+            metadata: { riskScore: riskResult.score, flags: combinedRiskFlags },
+          },
+        });
+      }
+
       return { status: 201 as const, body: { success: true, message: "Your entry has been submitted." } };
     }, { maxWait: 10_000, timeout: 30_000 });
 

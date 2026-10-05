@@ -1,5 +1,6 @@
 (() => {
   const ROOT = "/apps/raffle";
+
   const formatDuration = (milliseconds) => {
     const seconds = Math.max(0, Math.floor(milliseconds / 1000));
     const days = Math.floor(seconds / 86400);
@@ -8,6 +9,27 @@
     const remainingSeconds = seconds % 60;
     return `${days > 0 ? days + "d " : ""}${hours}h ${minutes}m ${remainingSeconds}s`;
   };
+
+  async function getDeviceFingerprintHash() {
+    try {
+      const components = [
+        navigator.userAgent || "",
+        navigator.language || "",
+        screen.width || 0,
+        screen.height || 0,
+        screen.colorDepth || 0,
+        new Date().getTimezoneOffset(),
+        navigator.hardwareConcurrency || 1,
+        navigator.platform || ""
+      ].join("###");
+      const buffer = new TextEncoder().encode(components);
+      const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    } catch {
+      return "fp_client_" + Math.random().toString(36).substring(2);
+    }
+  }
 
   document.querySelectorAll("[data-fairdrops-entry]").forEach(async (root) => {
     const rawDrawId = root.dataset.drawId || "latest";
@@ -22,17 +44,58 @@
     const button = root.querySelector("[data-entry-button]");
     const login = root.querySelector("[data-login-link]");
     const rulesLink = root.querySelector("[data-official-rules]");
+    const honeypotEl = root.querySelector("[data-fairdrops-honeypot]");
+    const turnstileContainer = root.querySelector("[data-turnstile-container]");
 
     let availableDraws = [];
     let currentDraw = null;
     let customerId = null;
     let countdownTimer = null;
+    let formToken = null;
+    let turnstileSiteKey = "1x00000000000000000000AA";
+    let turnstileToken = null;
+    let turnstileWidgetId = null;
 
     const rulesUrl = root.dataset.rulesUrl;
     if (rulesUrl && rulesLink) {
       rulesLink.href = rulesUrl;
       rulesLink.hidden = false;
     }
+
+    const initTurnstile = (siteKey) => {
+      if (!turnstileContainer || !siteKey) return;
+      let attempts = 0;
+      const render = () => {
+        if (window.turnstile && typeof window.turnstile.render === "function") {
+          try {
+            if (turnstileWidgetId !== null) {
+              window.turnstile.reset(turnstileWidgetId);
+              turnstileToken = null;
+            } else {
+              turnstileWidgetId = window.turnstile.render(turnstileContainer, {
+                sitekey: siteKey,
+                theme: "light",
+                callback: (tok) => {
+                  turnstileToken = tok;
+                },
+                "error-callback": () => {
+                  turnstileToken = null;
+                },
+                "expired-callback": () => {
+                  turnstileToken = null;
+                },
+              });
+            }
+          } catch (e) {
+            console.warn("Turnstile init notice:", e);
+          }
+        } else if (attempts < 20) {
+          attempts++;
+          setTimeout(render, 250);
+        }
+      };
+      render();
+    };
 
     const updateCountdown = () => {
       if (!currentDraw) return;
@@ -51,9 +114,11 @@
       }
     };
 
-    const displayDraw = (draw) => {
+    const displayDraw = async (draw) => {
       currentDraw = draw;
       if (!draw) return;
+
+      formToken = draw.formToken || formToken;
 
       if (titleEl && draw.title) titleEl.textContent = draw.title;
       if (statusEl && draw.status) statusEl.textContent = draw.status;
@@ -83,6 +148,7 @@
           button.disabled = false;
         }
         if (login) login.style.display = "none";
+        initTurnstile(turnstileSiteKey);
       } else {
         if (button) button.style.display = "none";
         if (login) login.style.display = "inline-block";
@@ -99,7 +165,6 @@
 
     try {
       if (specifiedDrawId === "latest") {
-        // Fetch all active/scheduled draws for this store
         const response = await fetch(`${ROOT}/draws`, {
           credentials: "same-origin",
           headers: { Accept: "application/json" }
@@ -108,6 +173,7 @@
           const result = await response.json();
           availableDraws = result.draws || [];
           customerId = result.customerId;
+          if (result.turnstileSiteKey) turnstileSiteKey = result.turnstileSiteKey;
 
           if (availableDraws.length > 1 && selectorWrapper && selectEl) {
             selectEl.innerHTML = "";
@@ -126,11 +192,10 @@
           }
 
           if (availableDraws.length > 0) {
-            displayDraw(availableDraws[0]);
+            await displayDraw(availableDraws[0]);
           }
         }
       } else {
-        // A specific draw ID was set in block settings
         const response = await fetch(`${ROOT}/draw/${encodeURIComponent(specifiedDrawId)}`, {
           credentials: "same-origin",
           headers: { Accept: "application/json" }
@@ -138,7 +203,9 @@
         if (response.ok) {
           const result = await response.json();
           customerId = result.customerId;
-          if (result.draw) displayDraw(result.draw);
+          if (result.turnstileSiteKey) turnstileSiteKey = result.turnstileSiteKey;
+          if (result.formToken) formToken = result.formToken;
+          if (result.draw) await displayDraw(result.draw);
         }
       }
     } catch {
@@ -150,7 +217,7 @@
         button.disabled = true;
         if (messageEl) {
           messageEl.style.color = "#202223";
-          messageEl.textContent = "Submitting your entry…";
+          messageEl.textContent = "Verifying security & submitting entry…";
         }
         try {
           const targetId = currentDraw?.id || specifiedDrawId;
@@ -163,6 +230,28 @@
             phone: customerMeta.dataset.phone || undefined,
           } : {};
 
+          // If no form token yet, obtain one from server
+          if (!formToken && targetId) {
+            try {
+              const tokenRes = await fetch(`${ROOT}/form-token/${encodeURIComponent(targetId)}`, {
+                credentials: "same-origin",
+                headers: { Accept: "application/json" },
+              });
+              if (tokenRes.ok) {
+                const tokenData = await tokenRes.json();
+                formToken = tokenData.formToken;
+              }
+            } catch {
+              // will be verified server-side
+            }
+          }
+
+          // Calculate client fingerprint hash
+          const deviceFingerprintHash = await getDeviceFingerprintHash();
+
+          // Get honeypot value if any
+          const honeypotVal = honeypotEl ? (honeypotEl.value || "") : "";
+
           const entryResponse = await fetch(`${ROOT}/entry/${encodeURIComponent(targetId)}`, {
             method: "POST",
             credentials: "same-origin",
@@ -170,7 +259,13 @@
               "Content-Type": "application/json",
               "Accept": "application/json",
             },
-            body: JSON.stringify({ customerData }),
+            body: JSON.stringify({
+              customerData,
+              formToken,
+              turnstileToken,
+              deviceFingerprintHash,
+              website_hp_check: honeypotVal,
+            }),
           });
 
           let payload = {};
@@ -189,6 +284,10 @@
             if (messageEl) {
               messageEl.style.color = "#d72c0d";
               messageEl.textContent = payload.userMessage || payload.error || "We couldn't submit your entry. Please check requirements.";
+            }
+            if (window.turnstile && turnstileWidgetId !== null) {
+              window.turnstile.reset(turnstileWidgetId);
+              turnstileToken = null;
             }
             button.disabled = false;
           } else {

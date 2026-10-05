@@ -66,13 +66,27 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const expiredCount = draw.allocations.filter((a) => a.status === "EXPIRED").length;
   const activeCount = draw.allocations.filter((a) => ["ISSUED", "OPENED"].includes(a.status)).length;
 
+  const flaggedEntries = await tenant.entry.findMany({
+    where: { drawId, status: "FLAGGED" },
+    select: {
+      id: true,
+      customerGid: true,
+      riskScore: true,
+      riskFlags: true,
+      createdAt: true,
+    },
+    orderBy: { riskScore: "desc" },
+  });
+
   return {
     draw,
+    flaggedEntries,
     stats: {
       totalEntries: draw._count.entries,
       purchasedCount,
       expiredCount,
       activeCount,
+      flaggedCount: flaggedEntries.length,
     },
   };
 };
@@ -274,6 +288,64 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     return Response.json({ success: true });
   }
 
+  if (intent === "approve_entry") {
+    const entryId = String(formData.get("entryId") || "");
+    const entry = await tenant.entry.findFirst({
+      where: { id: entryId, drawId: draw.id },
+    });
+
+    if (!entry) {
+      return Response.json({ error: "Entry not found" }, { status: 404 });
+    }
+
+    await tenant.entry.update({
+      where: { id: entry.id },
+      data: { status: "VALID" },
+    });
+
+    await tenant.auditLog.create({
+      drawId: draw.id,
+      eventType: "ENTRY_APPROVED_BY_MERCHANT",
+      actor: session.shop,
+      metadata: {
+        entryId: entry.id,
+        previousStatus: entry.status,
+        riskScore: entry.riskScore,
+      },
+    });
+
+    return Response.json({ success: true });
+  }
+
+  if (intent === "reject_entry") {
+    const entryId = String(formData.get("entryId") || "");
+    const entry = await tenant.entry.findFirst({
+      where: { id: entryId, drawId: draw.id },
+    });
+
+    if (!entry) {
+      return Response.json({ error: "Entry not found" }, { status: 404 });
+    }
+
+    await tenant.entry.update({
+      where: { id: entry.id },
+      data: { status: "REJECTED" },
+    });
+
+    await tenant.auditLog.create({
+      drawId: draw.id,
+      eventType: "ENTRY_REJECTED_BY_MERCHANT",
+      actor: session.shop,
+      metadata: {
+        entryId: entry.id,
+        previousStatus: entry.status,
+        riskScore: entry.riskScore,
+      },
+    });
+
+    return Response.json({ success: true });
+  }
+
   return Response.json({ error: "Unknown intent" }, { status: 400 });
 };
 
@@ -328,7 +400,7 @@ const LIFECYCLE_STAGES = [
 ];
 
 export default function DrawDetails() {
-  const { draw, stats } = useLoaderData<typeof loader>();
+  const { draw, stats, flaggedEntries } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const submit = useSubmit();
   const navigation = useNavigation();
@@ -366,6 +438,14 @@ export default function DrawDetails() {
 
   const handleResendEmail = (allocationId: string) => {
     submit({ intent: "resend_winner_email", allocationId }, { method: "POST" });
+  };
+
+  const handleApproveEntry = (entryId: string) => {
+    submit({ intent: "approve_entry", entryId }, { method: "POST" });
+  };
+
+  const handleRejectEntry = (entryId: string) => {
+    submit({ intent: "reject_entry", entryId }, { method: "POST" });
   };
 
   return (
@@ -679,6 +759,111 @@ export default function DrawDetails() {
               </Card>
             )}
           </BlockStack>
+        </Layout.Section>
+
+        {/* Flagged Entries for Review (Anti-Bot Screening) */}
+        <Layout.Section>
+          <Card padding="0">
+            <Box padding="400">
+              <InlineStack align="space-between" blockAlign="center">
+                <BlockStack gap="100">
+                  <InlineStack gap="200" blockAlign="center">
+                    <Text variant="headingSm" as="h4">
+                      Flagged Entries (Fraud Screening)
+                    </Text>
+                    {stats.flaggedCount > 0 ? (
+                      <Badge tone="attention">{`${stats.flaggedCount} to review`}</Badge>
+                    ) : (
+                      <Badge tone="success">All clear</Badge>
+                    )}
+                  </InlineStack>
+                  <Text variant="bodySm" tone="subdued" as="p">
+                    Entries flagged by risk scoring (honeypot, fingerprint reuse, rate anomalies, disposable email, geo mismatch). Excluded from the draw unless approved by merchant.
+                  </Text>
+                </BlockStack>
+              </InlineStack>
+            </Box>
+            {flaggedEntries.length === 0 ? (
+              <Box padding="400">
+                <Text as="p" tone="subdued">
+                  No flagged entries requiring review. All entrants have passed fraud screening or have been resolved.
+                </Text>
+              </Box>
+            ) : (
+              <IndexTable
+                resourceName={{ singular: "flagged entry", plural: "flagged entries" }}
+                itemCount={flaggedEntries.length}
+                headings={[
+                  { title: "Customer ID" },
+                  { title: "Risk Score" },
+                  { title: "Reason Codes" },
+                  { title: "Submitted At" },
+                  { title: "Actions" },
+                ]}
+                selectable={false}
+              >
+                {flaggedEntries.map((entry, idx) => {
+                  const flags = Array.isArray(entry.riskFlags)
+                    ? (entry.riskFlags as string[])
+                    : [];
+                  return (
+                    <IndexTable.Row id={entry.id} key={entry.id} position={idx}>
+                      <IndexTable.Cell>
+                        <Text variant="bodySm" fontWeight="bold" as="span">
+                          ...{entry.customerGid.slice(-8)}
+                        </Text>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Badge tone={entry.riskScore >= 80 ? "critical" : "attention"}>
+                          {`${entry.riskScore} / 100`}
+                        </Badge>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <InlineStack gap="100" wrap>
+                          {flags.length > 0 ? (
+                            flags.map((flag) => (
+                              <Badge key={flag} tone="warning">
+                                {flag}
+                              </Badge>
+                            ))
+                          ) : (
+                            <Text variant="bodySm" tone="subdued" as="span">
+                              None
+                            </Text>
+                          )}
+                        </InlineStack>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Text variant="bodySm" tone="subdued" as="span">
+                          {new Date(entry.createdAt).toLocaleString()}
+                        </Text>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <InlineStack gap="200">
+                          <Button
+                            size="slim"
+                            tone="success"
+                            onClick={() => handleApproveEntry(entry.id)}
+                            loading={isActionRunning}
+                          >
+                            Approve
+                          </Button>
+                          <Button
+                            size="slim"
+                            tone="critical"
+                            onClick={() => handleRejectEntry(entry.id)}
+                            loading={isActionRunning}
+                          >
+                            Reject
+                          </Button>
+                        </InlineStack>
+                      </IndexTable.Cell>
+                    </IndexTable.Row>
+                  );
+                })}
+              </IndexTable>
+            )}
+          </Card>
         </Layout.Section>
 
         {/* Allocations Table */}

@@ -38,6 +38,14 @@
     </div>
 
     <div class="fairdrops-action-box">
+      <!-- Anti-Bot Honeypot -->
+      <div style="position: absolute; left: -9999px; top: -9999px; opacity: 0; pointer-events: none;" aria-hidden="true">
+        <input type="text" name="website_hp_check" tabindex="-1" autocomplete="off" value="" data-fairdrops-honeypot>
+      </div>
+
+      <!-- Cloudflare Turnstile Container -->
+      <div class="fairdrops-turnstile-container" data-turnstile-container style="margin: 12px 0;"></div>
+
       <p data-customer-message class="fairdrops-message"></p>
       {% if customer %}
         <div
@@ -61,6 +69,7 @@
   </div>
 </div>
 
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 <script src="{{ 'raffle-entry.js' | asset_url }}" defer></script>
 <link rel="stylesheet" href="{{ 'raffle-entry.css' | asset_url }}">
 

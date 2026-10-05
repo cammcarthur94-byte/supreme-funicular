@@ -9,12 +9,29 @@ export const drawVariantInputSchema = z.object({
   quantity: z.coerce.number().int().min(1, "Quantity must be at least 1"),
 });
 
+export const riskThresholdsSchema = z.object({
+  flagScore: z.coerce.number().int().min(0).max(100).default(40),
+  rejectScore: z.coerce.number().int().min(0).max(100).default(80),
+  maxEntriesPerIp: z.coerce.number().int().min(1).default(5),
+  maxEntriesPerFingerprint: z.coerce.number().int().min(1).default(1),
+  minSubmitSeconds: z.coerce.number().int().min(1).default(3),
+});
+
+export type RiskThresholdsConfig = z.infer<typeof riskThresholdsSchema>;
+
 export const eligibilityRulesSchema = z.object({
   requireAccount: z.boolean().default(true),
   requireVerifiedEmail: z.boolean().default(true),
   allowedCountries: z.array(z.string().length(2)).default([]),
   minAccountAgeDays: z.coerce.number().int().min(0).default(0),
   requirePhone: z.boolean().default(false),
+  riskThresholds: riskThresholdsSchema.optional().default({
+    flagScore: 40,
+    rejectScore: 80,
+    maxEntriesPerIp: 5,
+    maxEntriesPerFingerprint: 1,
+    minSubmitSeconds: 3,
+  }),
 });
 
 export const drawFormSchema = z
@@ -51,6 +68,13 @@ export const drawFormSchema = z
       allowedCountries: [],
       minAccountAgeDays: 0,
       requirePhone: false,
+      riskThresholds: {
+        flagScore: 40,
+        rejectScore: 80,
+        maxEntriesPerIp: 5,
+        maxEntriesPerFingerprint: 1,
+        minSubmitSeconds: 3,
+      },
     }),
   })
   .refine(
@@ -80,7 +104,9 @@ export const drawFormSchema = z
 
 export type DrawFormData = z.infer<typeof drawFormSchema>;
 export type DrawVariantInput = z.infer<typeof drawVariantInputSchema>;
-export type EligibilityRules = z.infer<typeof eligibilityRulesSchema>;
+export type EligibilityRules = Omit<z.infer<typeof eligibilityRulesSchema>, "riskThresholds"> & {
+  riskThresholds?: RiskThresholdsConfig;
+};
 
 /**
  * Validates draw form input, optionally enforcing that scheduled dates are in the future for new draws.

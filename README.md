@@ -175,3 +175,33 @@ Before launching a live drop, verify complete product invisibility on your devel
    ```
    - **Expected Result**: Empty `edges` array (`[]`).
 
+
+---
+
+## 🤖 Anti-Bot & Fraud Controls (Phase 7)
+
+Fairdrops implements a multi-layered defense to prevent bot syndicates, scripted entries, and mass form submission from monopolizing raffle drops:
+
+### 1. Security Architecture
+- **Cloudflare Turnstile**: Embedded widget in the storefront theme block. Server-side token verification against `challenges.cloudflare.com` on every submission. Fails closed if verification fails or the service is unreachable.
+- **Signed Short-Lived Form Tokens**: HMAC-SHA256 signed session tokens bound to `drawId`, `customerId`, and `issuedAt`. Rejects expired tokens (> 30 minutes), replayed tokens (single-use nonce cache), and submissions faster than a minimum human fill time (default: 3 seconds).
+- **Honeypot Trap**: Invisible field positioned off-screen. Automated form fillers populating this field trigger an immediate silent rejection with audit logging (`HONEYPOT_BLOCKED`).
+- **Sliding-Window Rate Limiting**: Managed Redis (Upstash) with in-memory fallback. Limits requests per IP (10/min), per customer (5/min), and per draw (60/min), returning HTTP 429 when exceeded.
+- **Device & Browser Fingerprinting**: Lightweight client signal (hash of user agent, screen geometry, timezone offset, hardware concurrency) stored as a SHA-256 hash. Counts duplicate entries per fingerprint and per IP hash per draw.
+- **Dynamic Risk Scoring (`riskScore.ts`)**: Combines 8 fraud signals (fingerprint reuse, IP reuse, datacenter/VPN ASN, disposable email, new accounts, fast submission, geo mismatch, shared address hash) into a normalized 0–100 score.
+  - Score >= `rejectScore` (default 80): Hard rejection.
+  - `flagScore` <= Score < `rejectScore` (default 40–79): Accepted but marked `FLAGGED`. Flagged entries are automatically excluded from the draw unless reviewed and approved by the merchant.
+  - Score < `flagScore`: Marked `VALID` and eligible for draw selection.
+  - **No Hard-Block on IP Alone**: Households, universities, and mobile carriers legitimately share IP addresses. IP reuse adds weighted risk score rather than an immediate gate.
+- **Merchant Review UI**: Dedicated "Flagged entries" table on the Draw details page showing risk scores and reason codes without exposing raw PII, with one-click Approve and Reject actions logged to the `AuditLog`.
+- **Configurable Per-Draw Thresholds**: Merchants can adjust `flagScore`, `rejectScore`, `maxEntriesPerIp`, `maxEntriesPerFingerprint`, and `minSubmitSeconds` in the draw rules.
+
+### 2. Known Limitations & Honest Threat Model
+> [!IMPORTANT]
+> **No entry-stage security system can stop a determined person with multiple real identities.**
+> If an attacker uses multiple distinct devices, real family/friend identities, separate authentic payment methods, and distinct residential IP connections, their submissions appear indistinguishable from legitimate human customers at entry time.
+>
+> Fairdrops therefore enforces its second line of defense at the **claim and order stage**:
+> 1. **Address Normalization & Multi-Unit Restrictions**: Detects duplicate street addresses across winners and blocks multiple units from being shipped to the same physical location (configurable by merchant).
+> 2. **Shopify Native Order Risk**: Evaluates checkout risk via Shopify's machine-learning fraud analysis on the resulting draft order checkout.
+> 3. **Post-Checkout Order Cancellation & Waitlist Reallocation**: Merchants can cancel and refund suspicious or reseller orders with a single click, which automatically invalidates the allocation and releases the unit to the next eligible entrant on the waitlist.
