@@ -209,6 +209,7 @@ model Allocation {
   claimTokenHash String           @unique
   status         AllocationStatus @default(ISSUED)
   draftOrderGid  String?
+  invoiceUrl     String?          @db.Text
   deadlineAt     DateTime
   issuedAt       DateTime         @default(now())
   openedAt       DateTime?

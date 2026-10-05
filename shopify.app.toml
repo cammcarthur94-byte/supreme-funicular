@@ -31,6 +31,10 @@ api_version = "2025-01"
   uri = "/webhooks/products/update"
   topics = [ "products/update" ]
 
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/orders/create"
+  topics = [ "orders/create" ]
+
 [app_proxy]
 url = "https://fairdrops.onrender.com/apps/raffle"
 subpath = "raffle"

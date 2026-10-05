@@ -23,6 +23,9 @@ import {
   unpublishProductFromAllChannels,
 } from "../services/productVisibility.server";
 import { executeRandomDraw } from "../services/randomDraw.server";
+import { issueAllocationsForDraw, generateClaimToken } from "../services/allocationService.server";
+import { getEmailProvider, renderWinnerEmail } from "../services/emailService.server";
+import { decrypt } from "../services/encryption";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -202,6 +205,18 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     return Response.json({ success: true });
   }
 
+  if (intent === "issue_allocations") {
+    try {
+      const issueResult = await issueAllocationsForDraw(draw.id, admin);
+      return Response.json({ success: true, issueResult });
+    } catch (err) {
+      return Response.json(
+        { error: err instanceof Error ? err.message : String(err) },
+        { status: 400 }
+      );
+    }
+  }
+
   if (intent === "resend_winner_email") {
     const allocationId = String(formData.get("allocationId") || "");
     const allocation = await tenant.allocation.findFirst({
@@ -218,6 +233,36 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         { status: 400 }
       );
     }
+
+    const entry = await tenant.entry.findFirst({ where: { id: allocation.entryId } });
+    if (!entry) {
+      return Response.json({ error: "Entry not found" }, { status: 404 });
+    }
+    const decryptedEmail = decrypt(entry.emailEncrypted);
+    const { token, claimTokenHash } = generateClaimToken();
+
+    await tenant.allocation.update({
+      where: { id: allocation.id },
+      data: { claimTokenHash },
+    });
+
+    const emailProvider = getEmailProvider();
+    const claimUrl = `https://${session.shop}/apps/raffle/claim/${token}`;
+    const emailContent = renderWinnerEmail({
+      storeName: ((shop.settings as Record<string, unknown>)?.storeName as string) || session.shop,
+      productTitle: draw.title,
+      claimUrl,
+      deadline: allocation.deadlineAt,
+    });
+
+    await emailProvider.sendEmail({
+      to: decryptedEmail,
+      from: `Fairdrops Raffle <raffles@${session.shop}>`,
+      replyTo: `support@${session.shop}`,
+      subject: `🎉 You Won! Claim your item: ${draw.title}`,
+      html: emailContent.html,
+      text: emailContent.text,
+    });
 
     await tenant.auditLog.create({
       drawId: draw.id,
@@ -293,10 +338,17 @@ export default function DrawDetails() {
   const isOpen = draw.status === "OPEN";
   const canCancel = !["COMPLETED", "PURGED", "CANCELLED"].includes(draw.status);
   const isClosed = draw.status === "CLOSED";
+  const isDrawn = draw.status === "DRAWN";
   const rules = (draw.rules as unknown as EligibilityRules) || {};
   const handleExecuteDraw = () => {
     if (confirm("Run cryptographic draw now? Winners will be selected via Fisher-Yates shuffle.")) {
       submit({ intent: "execute_draw" }, { method: "POST" });
+    }
+  };
+
+  const handleIssueAllocations = () => {
+    if (confirm("Issue allocations and dispatch checkout claim links to winners?")) {
+      submit({ intent: "issue_allocations" }, { method: "POST" });
     }
   };
 
@@ -323,6 +375,15 @@ export default function DrawDetails() {
       backAction={{ content: "Draws", url: "/app" }}
       titleMetadata={getStatusBadge(draw.status)}
       secondaryActions={[
+        ...(isDrawn
+          ? [
+              {
+                content: "Issue Allocations to Winners",
+                onAction: handleIssueAllocations,
+                loading: isActionRunning,
+              },
+            ]
+          : []),
         ...(isClosed
           ? [
               {

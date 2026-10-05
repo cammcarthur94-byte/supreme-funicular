@@ -111,6 +111,13 @@ export function forShop(shopId: string) {
         });
       },
 
+      update: (args: Prisma.EntryUpdateArgs & { where: { id: string } }) => {
+        return prisma.entry.update({
+          ...args,
+          where: { id: args.where.id, shopId: cleanShopId },
+        });
+      },
+
       count: (args?: Prisma.EntryCountArgs) => {
         return prisma.entry.count({
           ...args,
@@ -141,6 +148,13 @@ export function forShop(shopId: string) {
             ...args.data,
             shop: { connect: { id: cleanShopId } },
           } as Prisma.AllocationCreateInput,
+        });
+      },
+
+      update: (args: Prisma.AllocationUpdateArgs & { where: { id: string } }) => {
+        return prisma.allocation.update({
+          ...args,
+          where: { id: args.where.id, shopId: cleanShopId },
         });
       },
 

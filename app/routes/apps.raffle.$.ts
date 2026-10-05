@@ -1,4 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import crypto from "node:crypto";
 import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
 import { decrypt, encrypt } from "../services/encryption";
@@ -13,7 +14,98 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   if (!proxy) return proxyJson({ error: "Forbidden" }, 403);
   if (request.method !== "GET") return proxyJson({ error: "Method not allowed" }, 405);
 
-  const [resource, drawId] = (params["*"] ?? "").split("/");
+  const [resource, identifier] = (params["*"] ?? "").split("/");
+
+  // Single-use, customer-gated claim endpoint (Phase 9)
+  if (resource === "claim" && identifier) {
+    const rawToken = identifier;
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+    const allocation = await prisma.allocation.findUnique({
+      where: { claimTokenHash: tokenHash },
+      include: {
+        draw: { select: { id: true, status: true } },
+        entry: { select: { id: true, customerGid: true } },
+      },
+    });
+
+    const GENERIC_EXPIRED_RESPONSE = new Response("Link is invalid or has expired.", {
+      status: 404,
+      headers: {
+        "Content-Type": "text/plain",
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+      },
+    });
+
+    if (!allocation) {
+      return GENERIC_EXPIRED_RESPONSE;
+    }
+
+    // Must be logged into the store
+    if (!proxy.customerId) {
+      const requestUrl = new URL(request.url);
+      const returnUrl = encodeURIComponent(requestUrl.pathname + requestUrl.search);
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: `https://${proxy.shop}/account/login?return_url=${returnUrl}`,
+          "Cache-Control": "no-store",
+          "Referrer-Policy": "no-referrer",
+        },
+      });
+    }
+
+    // Must match the winning customer's ID
+    const expectedId = allocation.entry.customerGid.replace("gid://shopify/Customer/", "");
+    const actualId = proxy.customerId.replace("gid://shopify/Customer/", "");
+    if (actualId !== expectedId) {
+      return GENERIC_EXPIRED_RESPONSE;
+    }
+
+    const now = new Date();
+    const isStatusValid = allocation.status === "ISSUED" || allocation.status === "OPENED";
+    const isWithinDeadline = now < allocation.deadlineAt;
+    const isDrawActive = allocation.draw.status !== "CANCELLED";
+
+    if (!isStatusValid || !isWithinDeadline || !isDrawActive) {
+      return GENERIC_EXPIRED_RESPONSE;
+    }
+
+    if (allocation.status === "ISSUED") {
+      await prisma.allocation.update({
+        where: { id: allocation.id },
+        data: {
+          status: "OPENED",
+          openedAt: now,
+        },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          shopId: allocation.shopId,
+          drawId: allocation.drawId,
+          eventType: "ALLOCATION_CLAIM_LINK_OPENED",
+          actor: `customer:${expectedId}`,
+          metadata: {
+            allocationId: allocation.id,
+            openedAt: now.toISOString(),
+          },
+        },
+      });
+    }
+
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: allocation.invoiceUrl || `https://${proxy.shop}/`,
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+      },
+    });
+  }
+
+  const drawId = identifier;
   if (resource !== "draw" || !drawId) return proxyJson({ error: "Not found" }, 404);
   const shop = await prisma.shop.findUnique({ where: { shopDomain: proxy.shop }, select: { id: true } });
   if (!shop) return proxyJson({ error: "Draw unavailable" }, 404);
