@@ -205,3 +205,25 @@ Fairdrops implements a multi-layered defense to prevent bot syndicates, scripted
 > 1. **Address Normalization & Multi-Unit Restrictions**: Detects duplicate street addresses across winners and blocks multiple units from being shipped to the same physical location (configurable by merchant).
 > 2. **Shopify Native Order Risk**: Evaluates checkout risk via Shopify's machine-learning fraud analysis on the resulting draft order checkout.
 > 3. **Post-Checkout Order Cancellation & Waitlist Reallocation**: Merchants can cancel and refund suspicious or reseller orders with a single click, which automatically invalidates the allocation and releases the unit to the next eligible entrant on the waitlist.
+
+---
+
+## 🎲 Cryptographic Random Draw Engine (Phase 8)
+
+Fairdrops guarantees verifiable mathematical fairness and transparency through an audited, serverless-optimized draw execution engine:
+
+### 1. Cryptographic Shuffle & Non-Manipulability
+- **CSPRNG Fisher-Yates**: Shuffling executes exactly once using Node's cryptographically secure pseudo-random number generator (`crypto.randomInt`), strictly avoiding predictable pseudo-random algorithms like `Math.random()`.
+- **Pre-Draw Commitment Hash**: Before the shuffle begins, a deterministic SHA-256 hash is computed over the lexicographically sorted list of eligible entry IDs (`computeCommitmentHash`). This commitment is stored in the database and logged to the immutable `AuditLog`, providing cryptographic proof that the entrant pool was fixed prior to winner selection. Merchants can optionally publish this hash before the draw.
+- **Rank Order Secrecy**: Entrant rank ordering is strictly confidential to prevent extortion or gaming. It is stored exclusively within the secure database and is never exposed in API responses or plain text logs to storefront customers.
+
+### 2. Idempotency & High-Volume Batch Architecture
+- **Row-Locked Transaction**: The draw runs inside a single database transaction with a PostgreSQL row lock (`SELECT ... FOR UPDATE`), preventing race conditions, concurrent webhook invocations, or double-draws.
+- **Strict Idempotency**: If the draw status is already `DRAWN`, `FULFILLING`, or later, the engine immediately aborts and returns the existing state without re-shuffling or modifying assigned ranks.
+- **Chunked Bulk Persistence**: Ranks are written using parameterized PostgreSQL bulk `VALUES` update joins in batches (default: 2,000 entries per batch), allowing 100k+ entrants to be ranked in seconds well within serverless function execution limits.
+- **Automated QStash Scheduling**: When a draw is scheduled, a delayed message is published to Upstash QStash set for `drawAt`. The incoming request to `/api/qstash/draw-lifecycle` is cryptographically signature-verified via QStash keys before execution.
+
+### 3. Edge Case Handling
+- **Fewer Entries Than Units**: When eligible entrants are fewer than the available units, every entrant is assigned a winning rank (1..N). Leftover units are recorded as unsold in an audit event (`DRAW_UNSOLD_UNITS_FLAGGED`), alerting the merchant to unallocated stock.
+- **Zero Entries**: If no eligible entries exist when the draw executes, the drop transitions directly to `COMPLETED` and records `DRAW_COMPLETED_ZERO_ENTRIES`, triggering the data purge schedule without failing.
+- **Eligibility Filtering**: Only entries with status `VALID` (or `FLAGGED` with merchant approval) are included in the draw pool. Flagged or disqualified entries are completely excluded.
