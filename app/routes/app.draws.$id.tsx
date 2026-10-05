@@ -718,6 +718,42 @@ export default function DrawDetails() {
               </BlockStack>
             </Card>
 
+            <Card>
+              <BlockStack gap="300">
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text variant="headingSm" as="h4">
+                    Storefront Integration
+                  </Text>
+                  <Badge tone="info">Theme App Extension</Badge>
+                </InlineStack>
+                <Text variant="bodySm" tone="subdued" as="p">
+                  How customers enter this raffle:
+                </Text>
+                <BlockStack gap="200">
+                  <Box padding="200" background="bg-surface-secondary" borderRadius="100">
+                    <BlockStack gap="100">
+                      <Text variant="bodySm" fontWeight="bold" as="p">
+                        1. Product Template (Recommended)
+                      </Text>
+                      <Text variant="bodySm" tone="subdued" as="p">
+                        Add the <strong>Raffle Entry</strong> app block to your product page in the Theme Editor. Fairdrops auto-detects the product and connects to this raffle.
+                      </Text>
+                    </BlockStack>
+                  </Box>
+                  <Box padding="200" background="bg-surface-secondary" borderRadius="100">
+                    <BlockStack gap="100">
+                      <Text variant="bodySm" fontWeight="bold" as="p">
+                        2. Multi-Raffle Drops Page
+                      </Text>
+                      <Text variant="bodySm" tone="subdued" as="p">
+                        Add the app block to your home page or a drops landing page. Customers can browse and select any open store raffle.
+                      </Text>
+                    </BlockStack>
+                  </Box>
+                </BlockStack>
+              </BlockStack>
+            </Card>
+
             {draw.visibilitySnapshots && draw.visibilitySnapshots.length > 0 && (
               <Card>
                 <BlockStack gap="300">

@@ -162,7 +162,7 @@ function extractVariantOptions(draw: { rules: unknown; variants?: Array<{ varian
         publicRulesText: true,
         rules: true,
         variants: {
-          select: { variantGid: true, msrpPrice: true, quantity: true },
+          select: { productGid: true, variantGid: true, msrpPrice: true, quantity: true },
         },
       },
     });
@@ -171,7 +171,7 @@ function extractVariantOptions(draw: { rules: unknown; variants?: Array<{ varian
       draws = await prisma.draw.findMany({
         where: { shopId: shop.id },
         orderBy: { createdAt: "desc" },
-        take: 5,
+        take: 10,
         select: {
           id: true,
           title: true,
@@ -181,7 +181,7 @@ function extractVariantOptions(draw: { rules: unknown; variants?: Array<{ varian
           publicRulesText: true,
           rules: true,
           variants: {
-            select: { variantGid: true, msrpPrice: true, quantity: true },
+            select: { productGid: true, variantGid: true, msrpPrice: true, quantity: true },
           },
         },
       });
@@ -189,6 +189,8 @@ function extractVariantOptions(draw: { rules: unknown; variants?: Array<{ varian
 
     const formattedDraws = draws.map((d) => {
       const rules = eligibilityRulesSchema.safeParse(d.rules);
+      const productGids = [...new Set(d.variants.map((v) => v.productGid).filter(Boolean))];
+      const productIds = productGids.map((gid) => gid.replace("gid://shopify/Product/", ""));
       return {
         id: d.id,
         title: d.title,
@@ -198,6 +200,9 @@ function extractVariantOptions(draw: { rules: unknown; variants?: Array<{ varian
         publicRulesText: d.publicRulesText,
         requireAccount: rules.success ? (rules.data.requireAccount !== false) : true,
         formToken: proxy.customerId ? issueFormToken({ drawId: d.id, customerId: proxy.customerId }) : null,
+        productGid: productGids[0] || null,
+        productId: productIds[0] || null,
+        productIds,
         variants: extractVariantOptions(d),
         eligibility: rules.success
           ? {
@@ -233,7 +238,7 @@ function extractVariantOptions(draw: { rules: unknown; variants?: Array<{ varian
           publicRulesText: true,
           rules: true,
           variants: {
-            select: { variantGid: true, msrpPrice: true, quantity: true },
+            select: { productGid: true, variantGid: true, msrpPrice: true, quantity: true },
           },
         },
       })
@@ -248,7 +253,7 @@ function extractVariantOptions(draw: { rules: unknown; variants?: Array<{ varian
           publicRulesText: true,
           rules: true,
           variants: {
-            select: { variantGid: true, msrpPrice: true, quantity: true },
+            select: { productGid: true, variantGid: true, msrpPrice: true, quantity: true },
           },
         },
       });
@@ -267,6 +272,9 @@ function extractVariantOptions(draw: { rules: unknown; variants?: Array<{ varian
 
   const rules = eligibilityRulesSchema.safeParse(draw.rules);
   const formToken = proxy.customerId ? issueFormToken({ drawId: draw.id, customerId: proxy.customerId }) : null;
+  const singleProductGids = [...new Set(draw.variants.map((v) => v.productGid).filter(Boolean))];
+  const singleProductIds = singleProductGids.map((gid) => gid.replace("gid://shopify/Product/", ""));
+
   return proxyJson({
     draw: {
       id: draw.id,
@@ -277,6 +285,9 @@ function extractVariantOptions(draw: { rules: unknown; variants?: Array<{ varian
       publicRulesText: draw.publicRulesText,
       requireAccount: rules.success ? (rules.data.requireAccount !== false) : true,
       formToken,
+      productGid: singleProductGids[0] || null,
+      productId: singleProductIds[0] || null,
+      productIds: singleProductIds,
       variants: extractVariantOptions(draw),
       eligibility: rules.success ? {
         requireVerifiedEmail: rules.data.requireVerifiedEmail,

@@ -1,3 +1,4 @@
+{% assign linked_product = block.settings.product | default: product %}
 {% assign raffle_id = block.settings.draw_id | default: section.settings.draw_id %}
 {% if raffle_id == blank %}
   {% assign raffle_id = "latest" %}
@@ -8,15 +9,24 @@
   class="fairdrops-entry"
   data-fairdrops-entry
   data-draw-id="{{ raffle_id | escape }}"
+  {% if linked_product %}
+    data-product-id="{{ linked_product.id }}"
+    data-product-title="{{ linked_product.title | escape }}"
+    data-product-handle="{{ linked_product.handle }}"
+  {% endif %}
   data-rules-url="{{ rules_url | escape }}"
   {{ block.shopify_attributes }}
 >
   <div class="fairdrops-card">
     <div class="fairdrops-selector-wrapper" data-draw-selector-wrapper style="display: none;">
-      <label class="fairdrops-selector-label">Select Raffle Drop:</label>
+      <div class="fairdrops-selector-header">
+        <label class="fairdrops-selector-label" data-selector-label>Select Raffle Drop:</label>
+        <span class="fairdrops-draw-count-badge" data-draw-count-badge style="display: none;"></span>
+      </div>
       <select class="fairdrops-select" data-draw-select>
-        <option value="">Loading raffles...</option>
+        <option value="">Discovering open raffles...</option>
       </select>
+      <div class="fairdrops-selector-hint" data-selector-hint style="display: none;"></div>
     </div>
 
     <div class="fairdrops-header">
@@ -97,8 +107,23 @@
   "target": "section",
   "stylesheet": "raffle-entry.css",
   "settings": [
-    { "type": "text", "id": "draw_id", "label": "Draw ID", "info": "Leave blank to automatically display your store's latest active raffle drop." },
-    { "type": "url", "id": "rules_url", "label": "Official rules link" }
+    {
+      "type": "product",
+      "id": "product",
+      "label": "Featured Product (Optional)",
+      "info": "Link directly to a product. If placed on a product page, Fairdrops automatically connects to that product's raffle."
+    },
+    {
+      "type": "text",
+      "id": "draw_id",
+      "label": "Specific Draw ID (Optional)",
+      "info": "Leave blank to automatically discover and list open store raffles."
+    },
+    {
+      "type": "url",
+      "id": "rules_url",
+      "label": "Official rules link"
+    }
   ]
 }
 {% endschema %}

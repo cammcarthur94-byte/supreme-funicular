@@ -34,8 +34,13 @@
   document.querySelectorAll("[data-fairdrops-entry]").forEach(async (root) => {
     const rawDrawId = root.dataset.drawId || "latest";
     const specifiedDrawId = rawDrawId.trim() === "" ? "latest" : rawDrawId.trim();
+    const productId = (root.dataset.productId || "").trim();
+    const productTitle = (root.dataset.productTitle || "").trim();
     const selectorWrapper = root.querySelector("[data-draw-selector-wrapper]");
     const selectEl = root.querySelector("[data-draw-select]");
+    const drawCountBadge = root.querySelector("[data-draw-count-badge]");
+    const selectorHint = root.querySelector("[data-selector-hint]");
+    const selectorLabel = root.querySelector("[data-selector-label]");
     const titleEl = root.querySelector("[data-draw-title]");
     const countdownEl = root.querySelector("[data-countdown]");
     const statusEl = root.querySelector("[data-draw-status]");
@@ -212,38 +217,109 @@
     };
 
     try {
-      if (specifiedDrawId === "latest") {
-        const response = await fetch(`${ROOT}/draws`, {
-          credentials: "same-origin",
-          headers: { Accept: "application/json" }
-        });
-        if (response.ok) {
-          const result = await response.json();
-          availableDraws = result.draws || [];
-          customerId = result.customerId;
-          if (result.turnstileSiteKey) turnstileSiteKey = result.turnstileSiteKey;
+      const response = await fetch(`${ROOT}/draws`, {
+        credentials: "same-origin",
+        headers: { Accept: "application/json" }
+      });
+      if (response.ok) {
+        const result = await response.json();
+        availableDraws = result.draws || [];
+        customerId = result.customerId;
+        if (result.turnstileSiteKey) turnstileSiteKey = result.turnstileSiteKey;
 
-          if (availableDraws.length > 1 && selectorWrapper && selectEl) {
-            selectEl.innerHTML = "";
-            availableDraws.forEach((d) => {
-              const opt = document.createElement("option");
-              opt.value = d.id;
-              opt.textContent = `${d.title} (${d.status})`;
-              selectEl.appendChild(opt);
-            });
-            selectorWrapper.style.display = "block";
-            selectEl.addEventListener("change", (e) => {
-              const selectedId = e.target.value;
-              const found = availableDraws.find((d) => d.id === selectedId);
-              if (found) displayDraw(found);
-            });
+        if (availableDraws.length === 0) {
+          if (titleEl) titleEl.textContent = "No Active Raffle Drops";
+          if (statusEl) {
+            statusEl.textContent = "Inactive";
+            statusEl.className = "fairdrops-badge";
           }
-
-          if (availableDraws.length > 0) {
-            await displayDraw(availableDraws[0]);
-          }
+          if (countdownEl) countdownEl.textContent = "Check back soon for upcoming drops";
+          if (button) button.style.display = "none";
+          if (variantsBox) variantsBox.style.display = "none";
+          if (selectorWrapper) selectorWrapper.style.display = "none";
+          return;
         }
-      } else {
+
+        // Determine default selected draw:
+        let initialDraw = null;
+        let matchedByProduct = false;
+
+        // 1. Explicit drawId setting (if not 'latest')
+        if (specifiedDrawId && specifiedDrawId !== "latest") {
+          initialDraw = availableDraws.find((d) => d.id === specifiedDrawId);
+        }
+
+        // 2. Product match (if block is placed on a product page or has product setting)
+        if (!initialDraw && productId) {
+          initialDraw = availableDraws.find((d) => {
+            const matchesId = d.productId === productId || (Array.isArray(d.productIds) && d.productIds.includes(productId));
+            const matchesGid = d.productGid && d.productGid.endsWith(`/${productId}`);
+            return matchesId || matchesGid;
+          });
+          if (initialDraw) matchedByProduct = true;
+        }
+
+        // 3. Fallback to first OPEN draw, or first available draw
+        if (!initialDraw) {
+          initialDraw = availableDraws.find((d) => d.status === "OPEN") || availableDraws[0];
+        }
+
+        // Render Multi-Raffle Selector
+        if (selectorWrapper && selectEl) {
+          selectEl.innerHTML = "";
+          availableDraws.forEach((d) => {
+            const opt = document.createElement("option");
+            opt.value = d.id;
+            const isMatch = productId && (d.productId === productId || (Array.isArray(d.productIds) && d.productIds.includes(productId)));
+            const prefix = isMatch ? "★ [This Product] " : "";
+            const statusLabel = d.status === "OPEN" ? "🟢 Open" : (d.status === "SCHEDULED" ? "🟡 Upcoming" : "⚪ Closed");
+            opt.textContent = `${prefix}${d.title} — ${statusLabel}`;
+            if (d.id === initialDraw.id) {
+              opt.selected = true;
+            }
+            selectEl.appendChild(opt);
+          });
+
+          if (drawCountBadge) {
+            drawCountBadge.textContent = `${availableDraws.length} ${availableDraws.length === 1 ? "Drop" : "Drops"} Available`;
+            drawCountBadge.style.display = "inline-block";
+          }
+
+          if (selectorHint) {
+            if (matchedByProduct) {
+              selectorHint.textContent = `✨ Automatically selected raffle for ${productTitle || "this product"}. You can also choose other drops above.`;
+              selectorHint.style.display = "block";
+            } else if (productId) {
+              selectorHint.textContent = `ℹ️ Showing available store raffles. Choose a drop above to enter.`;
+              selectorHint.style.display = "block";
+            } else {
+              selectorHint.style.display = "none";
+            }
+          }
+
+          selectorWrapper.style.display = "block";
+
+          selectEl.addEventListener("change", (e) => {
+            const selectedId = e.target.value;
+            const found = availableDraws.find((d) => d.id === selectedId);
+            if (found) {
+              displayDraw(found);
+              if (selectorHint && productId) {
+                const isSelectedProduct = found.productId === productId || (Array.isArray(found.productIds) && found.productIds.includes(productId));
+                if (isSelectedProduct) {
+                  selectorHint.textContent = `✨ Selected raffle for ${productTitle || "this product"}.`;
+                } else {
+                  selectorHint.textContent = `Browsing drop: ${found.title}`;
+                }
+              }
+            }
+          });
+        }
+
+        if (initialDraw) {
+          await displayDraw(initialDraw);
+        }
+      } else if (specifiedDrawId && specifiedDrawId !== "latest") {
         const response = await fetch(`${ROOT}/draw/${encodeURIComponent(specifiedDrawId)}`, {
           credentials: "same-origin",
           headers: { Accept: "application/json" }
