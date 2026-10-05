@@ -33,7 +33,7 @@ api_version = "2025-01"
 
 
 [app_proxy]
-url = "https://fairdrops.onrender.com/apps/raffle"
+url = "https://movers-dylan-loved-fotos.trycloudflare.com/apps/raffle"
 subpath = "raffle"
 prefix = "apps"
 
@@ -41,5 +41,4 @@ prefix = "apps"
 redirect_urls = [ "https://fairdrops.onrender.com/auth/callback" ]
 
 [build]
-include_config_on_deploy = true
 automatically_update_urls_on_dev = true
