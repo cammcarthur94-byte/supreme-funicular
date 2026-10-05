@@ -55,7 +55,17 @@ export default defineConfig({
   build: {
     assetsInlineLimit: 0,
   },
+  resolve: {
+    dedupe: ["react", "react-dom"],
+  },
   optimizeDeps: {
-    include: ["@shopify/app-bridge-react"],
+    include: [
+      "react",
+      "react-dom",
+      "react/jsx-runtime",
+      "@shopify/app-bridge-react",
+      "@shopify/polaris",
+      "@shopify/shopify-app-react-router/react",
+    ],
   },
 }) satisfies UserConfig;
