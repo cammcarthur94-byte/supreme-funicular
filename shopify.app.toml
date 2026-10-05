@@ -33,7 +33,7 @@ api_version = "2025-01"
 
 
 [app_proxy]
-url = "https://desperate-zealand-induction-copper.trycloudflare.com/apps/raffle"
+url = "https://plans-enjoy-half-yeast.trycloudflare.com/apps/raffle"
 subpath = "raffle"
 prefix = "apps"
 

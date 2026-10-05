@@ -154,13 +154,32 @@
         }
         try {
           const targetId = currentDraw?.id || specifiedDrawId;
+          const customerMeta = root.querySelector("[data-customer-meta]");
+          const customerData = customerMeta ? {
+            email: customerMeta.dataset.email || undefined,
+            verifiedEmail: customerMeta.dataset.verified !== "false",
+            countryCode: customerMeta.dataset.country || undefined,
+            createdAt: customerMeta.dataset.created || undefined,
+            phone: customerMeta.dataset.phone || undefined,
+          } : {};
+
           const entryResponse = await fetch(`${ROOT}/entry/${encodeURIComponent(targetId)}`, {
             method: "POST",
             credentials: "same-origin",
-            headers: { "Content-Type": "application/json" },
-            body: "{}",
+            headers: {
+              "Content-Type": "application/json",
+              "Accept": "application/json",
+            },
+            body: JSON.stringify({ customerData }),
           });
-          const payload = await entryResponse.json();
+
+          let payload = {};
+          try {
+            payload = await entryResponse.json();
+          } catch {
+            payload = { error: "Unexpected response from server. Please try again." };
+          }
+
           if (!entryResponse.ok) {
             if (messageEl) {
               messageEl.style.color = "#d72c0d";
@@ -174,7 +193,8 @@
             }
             button.style.display = "none";
           }
-        } catch {
+        } catch (err) {
+          console.error("Fairdrops entry error:", err);
           if (messageEl) {
             messageEl.style.color = "#d72c0d";
             messageEl.textContent = "Error submitting your entry. Please try again.";

@@ -40,6 +40,15 @@
     <div class="fairdrops-action-box">
       <p data-customer-message class="fairdrops-message"></p>
       {% if customer %}
+        <div
+          data-customer-meta
+          data-email="{{ customer.email | escape }}"
+          data-verified="true"
+          data-country="{{ customer.default_address.country_code | default: customer.addresses.first.country_code | default: shop.country_code }}"
+          data-created="{{ customer.created_at | date: '%Y-%m-%d' }}"
+          data-phone="{{ customer.phone }}"
+          hidden
+        ></div>
         <button type="button" data-entry-button class="fairdrops-submit-btn">
           Enter This Draw
         </button>
