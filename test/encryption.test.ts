@@ -102,4 +102,14 @@ describe("Encryption Service (AES-256-GCM)", () => {
     expect(hash1).toBe(hash2);
     expect(hashIdentifier("other@test.com")).not.toBe(hash1);
   });
+
+  it("falls back to SHOPIFY_API_SECRET if ENCRYPTION_MASTER_KEY is missing", () => {
+    delete process.env.ENCRYPTION_MASTER_KEY;
+    process.env.SHOPIFY_API_SECRET = "test-api-secret-12345";
+
+    const plaintext = "fallback-test-message";
+    const encrypted = encrypt(plaintext);
+    const decrypted = decrypt(encrypted);
+    expect(decrypted).toBe(plaintext);
+  });
 });

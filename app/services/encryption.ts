@@ -19,6 +19,10 @@ function normalizeKey(keyInput?: string | Buffer): Buffer {
 
   const envKey = keyInput || process.env.ENCRYPTION_MASTER_KEY;
   if (!envKey) {
+    if (process.env.SHOPIFY_API_SECRET) {
+      console.warn("[WARN] ENCRYPTION_MASTER_KEY not set. Using key derived from SHOPIFY_API_SECRET for development.");
+      return crypto.createHash("sha256").update(`fairdrops:${process.env.SHOPIFY_API_SECRET}`).digest();
+    }
     throw new Error(
       "Missing encryption key. Provide a key or configure ENCRYPTION_MASTER_KEY in environment variables."
     );
