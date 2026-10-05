@@ -160,6 +160,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     drawId: existingDraw.id,
     entryOpensAt: new Date(entryOpensAt),
     entryClosesAt: new Date(entryClosesAt),
+    drawAt: new Date(drawAt),
   });
 
   // Schedule self-scheduling visibility guard check

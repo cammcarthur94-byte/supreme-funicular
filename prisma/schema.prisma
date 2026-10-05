@@ -106,6 +106,7 @@ model Draw {
   publicRulesText      String?    @db.Text
   purgeAfterDays       Int        @default(14)
   encryptionKeyId      String?
+  commitmentHash       String?
   hasVisibilityWarning Boolean    @default(false)
   visibilityWarning    String?    @db.Text
   createdAt            DateTime   @default(now())

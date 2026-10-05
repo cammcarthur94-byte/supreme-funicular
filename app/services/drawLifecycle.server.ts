@@ -1,11 +1,14 @@
 import prisma from "../db.server";
 import { getQStashClient, getQStashReceiver } from "./qstash.server";
+import { executeRandomDraw } from "./randomDraw.server";
 
 const MAX_QSTASH_DELAY_SECONDS = 6 * 24 * 60 * 60;
 
+export type DrawLifecycleAction = "open" | "close" | "draw";
+
 async function scheduleDrawLifecycleAction(
   drawId: string,
-  action: "open" | "close",
+  action: DrawLifecycleAction,
   targetAt: Date,
   attempt = 0
 ): Promise<boolean> {
@@ -36,17 +39,22 @@ export async function scheduleDrawLifecycle(input: {
   drawId: string;
   entryOpensAt: Date;
   entryClosesAt: Date;
+  drawAt?: Date;
 }): Promise<{ scheduled: boolean }> {
-  const [openScheduled, closeScheduled] = await Promise.all([
+  const tasks = [
     scheduleDrawLifecycleAction(input.drawId, "open", input.entryOpensAt),
     scheduleDrawLifecycleAction(input.drawId, "close", input.entryClosesAt),
-  ]);
-  return { scheduled: openScheduled && closeScheduled };
+  ];
+  if (input.drawAt) {
+    tasks.push(scheduleDrawLifecycleAction(input.drawId, "draw", input.drawAt));
+  }
+  const results = await Promise.all(tasks);
+  return { scheduled: results.every(Boolean) };
 }
 
 export async function rescheduleDrawLifecycleAction(
   drawId: string,
-  action: "open" | "close",
+  action: DrawLifecycleAction,
   targetAt: Date,
   attempt: number
 ): Promise<boolean> {
@@ -66,9 +74,28 @@ export async function verifySignedQStashRequest(request: Request, rawBody: strin
 
 export async function applyDrawLifecycleAction(
   drawId: string,
-  action: "open" | "close",
+  action: DrawLifecycleAction,
   now = new Date()
-): Promise<"updated" | "not_due" | "expired" | "unchanged" | "not_found"> {
+): Promise<
+  | "updated"
+  | "not_due"
+  | "expired"
+  | "unchanged"
+  | "not_found"
+  | "drawn"
+  | "completed_zero_entries"
+  | "invalid_state"
+> {
+  if (action === "draw") {
+    const drawResult = await executeRandomDraw(drawId, { now });
+    if (drawResult.status === "drawn") return "drawn";
+    if (drawResult.status === "completed_zero_entries") return "completed_zero_entries";
+    if (drawResult.status === "already_drawn") return "unchanged";
+    if (drawResult.status === "not_due") return "not_due";
+    if (drawResult.status === "not_found") return "not_found";
+    return "invalid_state";
+  }
+
   return prisma.$transaction(async (tx) => {
     const [draw] = await tx.$queryRaw<Array<{
       id: string;

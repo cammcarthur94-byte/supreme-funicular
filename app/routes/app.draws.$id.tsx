@@ -22,6 +22,7 @@ import {
   getProductPublicationState,
   unpublishProductFromAllChannels,
 } from "../services/productVisibility.server";
+import { executeRandomDraw } from "../services/randomDraw.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -131,6 +132,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
 
     return Response.json({ success: true, clean: !hasAnyActivePublication });
+  }
+
+  if (intent === "execute_draw") {
+    const drawResult = await executeRandomDraw(draw.id);
+    if (drawResult.status === "invalid_state" || drawResult.status === "not_due") {
+      return Response.json(
+        { error: drawResult.message || "Cannot execute draw at this time." },
+        { status: 400 }
+      );
+    }
+    return Response.json({ success: true, drawResult });
   }
 
   if (intent === "cancel_draw") {
@@ -280,7 +292,13 @@ export default function DrawDetails() {
   const isScheduled = draw.status === "SCHEDULED";
   const isOpen = draw.status === "OPEN";
   const canCancel = !["COMPLETED", "PURGED", "CANCELLED"].includes(draw.status);
+  const isClosed = draw.status === "CLOSED";
   const rules = (draw.rules as unknown as EligibilityRules) || {};
+  const handleExecuteDraw = () => {
+    if (confirm("Run cryptographic draw now? Winners will be selected via Fisher-Yates shuffle.")) {
+      submit({ intent: "execute_draw" }, { method: "POST" });
+    }
+  };
 
   const handleCancel = () => {
     if (confirm("Are you sure you want to cancel this draw? This action cannot be undone.")) {
@@ -305,6 +323,15 @@ export default function DrawDetails() {
       backAction={{ content: "Draws", url: "/app" }}
       titleMetadata={getStatusBadge(draw.status)}
       secondaryActions={[
+        ...(isClosed
+          ? [
+              {
+                content: "Execute Draw Now",
+                onAction: handleExecuteDraw,
+                loading: isActionRunning,
+              },
+            ]
+          : []),
         ...(isScheduled
           ? [
               {
@@ -361,6 +388,29 @@ export default function DrawDetails() {
             <Banner title="This draw was cancelled" tone="critical">
               <p>No further entries, selections, or purchases can be processed for this draw.</p>
             </Banner>
+          </Layout.Section>
+        )}
+
+        {draw.commitmentHash && (
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="200">
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text variant="headingSm" as="h3">
+                    Cryptographic Commitment Hash (Fairness Proof)
+                  </Text>
+                  <Badge tone="success">Verified</Badge>
+                </InlineStack>
+                <Text as="p" tone="subdued">
+                  SHA-256 hash computed over sorted entry IDs immediately before the Fisher-Yates shuffle was performed. This proves the entrant pool was fixed prior to winner selection.
+                </Text>
+                <Box padding="200" background="bg-surface-secondary" borderRadius="100">
+                  <Text as="p" variant="bodySm">
+                    <code>{draw.commitmentHash}</code>
+                  </Text>
+                </Box>
+              </BlockStack>
+            </Card>
           </Layout.Section>
         )}
 

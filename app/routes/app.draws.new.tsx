@@ -129,6 +129,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     drawId: draw.id,
     entryOpensAt: draw.entryOpensAt,
     entryClosesAt: draw.entryClosesAt,
+    drawAt: draw.drawAt,
   });
 
   // Schedule self-scheduling QStash guard check

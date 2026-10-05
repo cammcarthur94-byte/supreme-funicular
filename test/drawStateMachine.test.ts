@@ -14,6 +14,7 @@ describe("Draw State Machine (drawStateMachine)", () => {
       expect(canTransition("SCHEDULED", "OPEN")).toBe(true);
       expect(canTransition("OPEN", "CLOSED")).toBe(true);
       expect(canTransition("CLOSED", "DRAWN")).toBe(true);
+      expect(canTransition("CLOSED", "COMPLETED")).toBe(true); // zero-entries edge case
       expect(canTransition("DRAWN", "FULFILLING")).toBe(true);
       expect(canTransition("FULFILLING", "COMPLETED")).toBe(true);
       expect(canTransition("COMPLETED", "PURGED")).toBe(true);
@@ -43,7 +44,8 @@ describe("Draw State Machine (drawStateMachine)", () => {
       expect(canTransition("OPEN", "DRAWN")).toBe(false);
       expect(canTransition("OPEN", "FULFILLING")).toBe(false);
       expect(canTransition("OPEN", "PURGED")).toBe(false);
-      expect(canTransition("CLOSED", "COMPLETED")).toBe(false);
+      expect(canTransition("CLOSED", "PURGED")).toBe(false);
+      expect(canTransition("DRAWN", "COMPLETED")).toBe(false);
     });
 
     it("disallows same-state transitions (no-ops)", () => {

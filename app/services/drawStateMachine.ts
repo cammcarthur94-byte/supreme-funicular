@@ -27,7 +27,7 @@ export class IllegalStateTransitionError extends Error {
 const ALLOWED_TRANSITIONS: Record<DrawStatus, readonly DrawStatus[]> = {
   SCHEDULED: ["OPEN", "CANCELLED"],
   OPEN: ["CLOSED", "CANCELLED"],
-  CLOSED: ["DRAWN", "CANCELLED"],
+  CLOSED: ["DRAWN", "COMPLETED", "CANCELLED"],
   DRAWN: ["FULFILLING", "CANCELLED"],
   FULFILLING: ["COMPLETED", "CANCELLED"],
   COMPLETED: ["PURGED"],

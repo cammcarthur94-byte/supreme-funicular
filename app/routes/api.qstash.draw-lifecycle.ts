@@ -1,5 +1,10 @@
 import type { ActionFunctionArgs } from "react-router";
-import { applyDrawLifecycleAction, rescheduleDrawLifecycleAction, verifySignedQStashRequest } from "../services/drawLifecycle.server";
+import {
+  applyDrawLifecycleAction,
+  rescheduleDrawLifecycleAction,
+  verifySignedQStashRequest,
+  type DrawLifecycleAction,
+} from "../services/drawLifecycle.server";
 import prisma from "../db.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -11,27 +16,50 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   try {
     const payload = JSON.parse(rawBody) as { drawId?: unknown; action?: unknown; attempt?: unknown };
-    if (typeof payload.drawId !== "string" || !/^[a-f\d-]{36}$/i.test(payload.drawId) || (payload.action !== "open" && payload.action !== "close") || (payload.attempt !== undefined && (!Number.isInteger(payload.attempt) || Number(payload.attempt) < 0))) {
+    const validActions: DrawLifecycleAction[] = ["open", "close", "draw"];
+    if (
+      typeof payload.drawId !== "string" ||
+      !/^[a-f\d-]{36}$/i.test(payload.drawId) ||
+      !validActions.includes(payload.action as DrawLifecycleAction) ||
+      (payload.attempt !== undefined && (!Number.isInteger(payload.attempt) || Number(payload.attempt) < 0))
+    ) {
       return Response.json({ error: "Invalid lifecycle message" }, { status: 400 });
     }
-    const result = await applyDrawLifecycleAction(payload.drawId, payload.action);
+
+    const actionType = payload.action as DrawLifecycleAction;
+    const result = await applyDrawLifecycleAction(payload.drawId, actionType);
+
     if (result === "not_due") {
       const draw = await prisma.draw.findUnique({
         where: { id: payload.drawId },
-        select: { entryOpensAt: true, entryClosesAt: true },
+        select: { entryOpensAt: true, entryClosesAt: true, drawAt: true },
       });
       if (draw) {
-        const targetAt = payload.action === "open" ? draw.entryOpensAt : draw.entryClosesAt;
+        let targetAt: Date;
+        if (actionType === "open") targetAt = draw.entryOpensAt;
+        else if (actionType === "close") targetAt = draw.entryClosesAt;
+        else targetAt = draw.drawAt;
+
         const attempt = Number(payload.attempt ?? 0) + 1;
-        if (attempt <= 100) await rescheduleDrawLifecycleAction(payload.drawId, payload.action, targetAt, attempt);
+        if (attempt <= 100) {
+          await rescheduleDrawLifecycleAction(payload.drawId, actionType, targetAt, attempt);
+        }
       }
-    } else if (result === "expired" && payload.action === "open") {
+    } else if (result === "expired" && actionType === "open") {
       const draw = await prisma.draw.findUnique({
         where: { id: payload.drawId },
         select: { entryClosesAt: true },
       });
-      if (draw) await rescheduleDrawLifecycleAction(payload.drawId, "close", draw.entryClosesAt, Number(payload.attempt ?? 0) + 1);
+      if (draw) {
+        await rescheduleDrawLifecycleAction(
+          payload.drawId,
+          "close",
+          draw.entryClosesAt,
+          Number(payload.attempt ?? 0) + 1
+        );
+      }
     }
+
     return Response.json({ success: true, result });
   } catch (error) {
     console.error("[draw-lifecycle] Signed QStash task failed:", error);
